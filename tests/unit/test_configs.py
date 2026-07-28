@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field, ValidationError
 from pydantic_config import ConfigFileError
 
 from prime_rl.configs.inference import InferenceConfig
-from prime_rl.configs.orchestrator import OrchestratorConfig
+from prime_rl.configs.orchestrator import EnvConfig, OrchestratorConfig
 from prime_rl.configs.rl import RLConfig
 from prime_rl.configs.sft import SFTConfig
 from prime_rl.configs.trainer import ModelConfig as TrainerModelConfig
@@ -189,6 +189,51 @@ def test_env_algo_overrides_top_level():
     dumped = config.model_dump(exclude_none=True)
     reloaded = OrchestratorConfig.model_validate(dumped)
     assert reloaded.train.env[0].algo is not None and reloaded.train.env[0].algo.type == "grpo"
+
+
+def test_factory_environment_is_native_and_roundtrips():
+    config = EnvConfig(
+        name="apex",
+        factory={
+            "import_path": "harness.environment.load_environment",
+            "kwargs": {"taskset": "harbor", "max_turns": 8},
+        },
+    )
+
+    assert not config.is_legacy
+    assert config.env_id == ""
+    assert config.resolved_name == "apex"
+    assert EnvConfig.model_validate(config.model_dump()) == config
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        (
+            {"factory": {"import_path": "package.make_environment"}},
+            "explicit name",
+        ),
+        (
+            {
+                "name": "apex",
+                "id": "legacy-env",
+                "factory": {"import_path": "package.make_environment"},
+            },
+            "cannot be combined",
+        ),
+        (
+            {
+                "name": "apex",
+                "taskset": {"id": "harbor"},
+                "factory": {"import_path": "package.make_environment"},
+            },
+            "cannot be combined",
+        ),
+    ],
+)
+def test_factory_environment_rejects_ambiguous_configuration(config, message):
+    with pytest.raises(ValidationError, match=message):
+        EnvConfig.model_validate(config)
 
 
 def test_trainer_enable_token_export_cli_flag():

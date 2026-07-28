@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal, TypeAlias
 
 import verifiers.v1 as vf
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, JsonValue, model_validator
 from renderers import AutoRendererConfig, RendererConfig
 
 from prime_rl.configs.algorithm import (
@@ -150,12 +150,23 @@ class EvalSamplingConfig(BaseConfig):
         return data
 
 
+class EnvironmentFactoryConfig(BaseConfig):
+    import_path: str
+    """Dotted path to a synchronous callable that returns a v1 ``Environment``."""
+
+    kwargs: dict[str, JsonValue] = Field(default_factory=dict)
+    """JSON-safe keyword arguments passed to the factory."""
+
+
 class EnvConfig(vf.EnvServerConfig):
     name: str | None = None
     """Display name for this environment in logs, metrics, and buffer keys. Defaults to the taskset id. Must be unique across all envs in the same group."""
 
     address: str | None = None
     """ZMQ address of an external env server (e.g. ``tcp://host:5000``). When set, the orchestrator connects to this server instead of spawning one; when None, a subprocess env server is spawned automatically. The ``pool`` sizes the spawned server."""
+
+    factory: EnvironmentFactoryConfig | None = None
+    """Optional constructor for a custom v1 environment. Requires an explicit ``name``."""
 
     ratio: float = Field(1.0, gt=0)
     """Sampling weight for this environment in the buffer. Relative weights are normalized to probabilities across envs (e.g. [1, 1] and [0.5, 0.5] are equivalent). Defaults to 1, i.e. equal weight per env."""
@@ -175,7 +186,7 @@ class EnvConfig(vf.EnvServerConfig):
     @property
     def is_legacy(self) -> bool:
         """A v0/legacy env (run via the bridge): an ``id`` is set and no v1 ``taskset`` is."""
-        return not self.taskset.id
+        return self.factory is None and not self.taskset.id
 
     @property
     def env_id(self) -> str:
@@ -188,7 +199,12 @@ class EnvConfig(vf.EnvServerConfig):
 
     @model_validator(mode="after")
     def validate_env(self):
-        if not self.taskset.id and not self.id:
+        if self.factory is not None:
+            if self.taskset.id or self.id:
+                raise ValueError("factory cannot be combined with taskset.id or id")
+            if not self.name:
+                raise ValueError("factory environments require an explicit name")
+        elif not self.taskset.id and not self.id:
             raise ValueError('no env configured — set taskset = { id = "<id>" } (v1) or id = "<id>" (v0/legacy)')
         if self.resolved_name == "agg":
             raise ValueError(

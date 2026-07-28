@@ -21,6 +21,7 @@ import multiprocessing as mp
 import os
 import queue
 import sys
+import time
 from collections.abc import Iterator, Sequence
 from multiprocessing.process import BaseProcess
 from pathlib import Path
@@ -127,16 +128,21 @@ class Env:
         log_file = log_dir / f"{self.name}.log"
         log_file.parent.mkdir(parents=True, exist_ok=True)
         get_logger().debug(f"Spawning env server {self.name} (id={self.config.env_id}, log={log_file})")
-        server_kwargs = (
-            dict(
+        if self.config.is_legacy:
+            server_kwargs = dict(
                 legacy=True,
                 env_id=self.config.env_id,
                 env_args=self.config.args,
                 extra_env_kwargs=self.config.extra_env_kwargs,
             )
-            if self.config.is_legacy
-            else dict(legacy=False, config=self.config)
-        )
+        elif self.config.factory is not None:
+            server_kwargs = dict(
+                legacy=False,
+                factory_path=self.config.factory.import_path,
+                factory_kwargs=self.config.factory.kwargs,
+            )
+        else:
+            server_kwargs = dict(legacy=False, config=self.config)
         process = ctx.Process(
             target=_run_env_server,
             kwargs=dict(
@@ -153,9 +159,21 @@ class Env:
         process.start()
         self._env_server_process = process
         try:
-            address = await asyncio.to_thread(address_queue.get, timeout=ENV_SERVER_SPAWN_TIMEOUT)
-        except queue.Empty:
-            raise RuntimeError(f"Env server {self.name} did not report its address within {ENV_SERVER_SPAWN_TIMEOUT}s")
+            address = await asyncio.to_thread(
+                _wait_for_server_address,
+                address_queue,
+                process,
+                self.name,
+            )
+        except BaseException:
+            if process.is_alive():
+                process.terminate()
+                process.join(timeout=10)
+            if process.is_alive():
+                process.kill()
+                process.join()
+            self._env_server_process = None
+            raise
         finally:
             address_queue.close()
             address_queue.join_thread()
@@ -257,8 +275,12 @@ class Envs(Generic[EnvT]):
     async def start(self, log_dir: Path, log_level: str | None = None, json_logging: bool = False) -> None:
         """Spawn env servers (where needed) and connect, one at a time. Each server
         binds an OS-assigned port and reports it back, so there's no port race."""
-        for env in self:
-            await env.start(log_dir=log_dir, log_level=log_level, json_logging=json_logging)
+        try:
+            for env in self:
+                await env.start(log_dir=log_dir, log_level=log_level, json_logging=json_logging)
+        except BaseException:
+            self.shutdown()
+            raise
         atexit.register(self.shutdown)
 
     def shutdown(self) -> None:
@@ -305,3 +327,21 @@ class EvalEnvs(Envs[EvalEnv]):
         for config in configs:
             env = EvalEnv(config)
             self._envs[env.name] = env
+
+
+def _wait_for_server_address(
+    address_queue,
+    process: BaseProcess,
+    name: str,
+) -> str:
+    deadline = time.monotonic() + ENV_SERVER_SPAWN_TIMEOUT
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(f"Env server {name} did not report its address within {ENV_SERVER_SPAWN_TIMEOUT}s")
+        try:
+            return address_queue.get(timeout=min(0.1, remaining))
+        except queue.Empty:
+            if not process.is_alive():
+                process.join()
+                raise RuntimeError(f"Env server {name} failed during startup (exit code {process.exitcode})")
