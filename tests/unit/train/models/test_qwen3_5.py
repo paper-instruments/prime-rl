@@ -6,10 +6,13 @@ import torch
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig, Qwen3_5VisionConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5ForCausalLM as HFQwen3_5ForCausalLM
 
+from prime_rl.configs.trainer import ModelConfig
+from prime_rl.trainer import model as model_loading
 from prime_rl.trainer.models.layers.attn import FlashAttention, substitute_ring_attn
 from prime_rl.trainer.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5Model
 from prime_rl.trainer.models.qwen3_5.modeling_qwen3_5 import Qwen3_5GatedFlashAttention
 from prime_rl.trainer.models.qwen3_5_moe import Qwen3_5MoeConfig
+from prime_rl.trainer.parallel_dims import ParallelDims
 from prime_rl.utils.cp import setup_model_cp
 
 
@@ -91,6 +94,40 @@ def test_qwen3_5_dense_matches_hf_state_keys_on_meta():
     assert set(prime_model.state_dict()) == set(hf_model.state_dict())
     for name, tensor in prime_model.state_dict().items():
         assert tensor.shape == hf_model.state_dict()[name].shape, name
+
+
+@pytest.mark.parametrize("ambiguous_snapshot", [False, True])
+def test_qwen3_5_dense_load_does_not_convert_identity_format(monkeypatch, tmp_path, ambiguous_snapshot):
+    with torch.device("meta"):
+        model = Qwen3_5ForCausalLM(_tiny_text_config())
+
+    if ambiguous_snapshot:
+        monkeypatch.setattr(type(model), "is_prime_state_dict", classmethod(lambda cls, state_dict: True))
+
+    snapshot_keys = list(model.state_dict())
+    load_state_dict = MagicMock()
+    save_state_dict = MagicMock(side_effect=OSError("read-only model cache"))
+    dcp_load = MagicMock()
+    reader = object()
+
+    monkeypatch.setattr(torch.distributed, "barrier", MagicMock())
+    monkeypatch.setattr(model_loading, "load_state_dict_keys", lambda path: snapshot_keys)
+    monkeypatch.setattr(model_loading, "load_state_dict", load_state_dict)
+    monkeypatch.setattr(model_loading, "save_state_dict", save_state_dict)
+    monkeypatch.setattr(model_loading, "HuggingFaceStorageReader", MagicMock(return_value=reader))
+    monkeypatch.setattr(model_loading, "dcp_load", dcp_load)
+    monkeypatch.setattr(model_loading, "_move_buffers_to_cuda", MagicMock())
+    monkeypatch.setattr(model, "init_buffers_post_meta", MagicMock())
+
+    model_loading.load_dcp_from_hf(
+        model,
+        ModelConfig(name=str(tmp_path), fsdp_cpu_offload=True),
+        ParallelDims(dp_replicate=1, dp_shard=1, cp=1, pp=1, ep=1, world_size=1),
+    )
+
+    load_state_dict.assert_not_called()
+    save_state_dict.assert_not_called()
+    assert dcp_load.call_args.kwargs["storage_reader"] is reader
 
 
 @pytest.mark.parametrize("attn_impl", ["flash_attention_3", "kernels-community/vllm-flash-attn3"])
