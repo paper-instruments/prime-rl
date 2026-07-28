@@ -18,8 +18,8 @@ from verifiers.v1.dialects import ChatDialect
 from prime_rl.orchestrator.trajectories import trace_to_samples
 
 _QWEN35_SNAPSHOT = (
-    "Qwen/Qwen3.5-0.8B",
-    "2fc06364715b967f1860aea9cf38778875588b17",
+    "Qwen/Qwen3.5-2B",
+    "15852e8c16360a2fea060d615a32b45270f8a8fc",
 )
 _QWEN36_SNAPSHOT = (
     "Qwen/Qwen3.6-27B",
