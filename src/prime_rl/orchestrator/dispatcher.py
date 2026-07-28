@@ -1,7 +1,7 @@
 """RolloutDispatcher: schedules rollouts under a shared permit counter.
 
 - Capacity (``max_inflight_rollouts``) is shared across train + eval.
-  A group-scoring task that runs N rollouts in one call reserves N permits.
+  A grouped episode that runs N rollouts in one call reserves N permits.
 - Optional rate limiting via ``AsyncLimiter(tasks_per_minute, 60)``.
 - Emit-everything invariant: every dispatched rollout eventually reaches
   ``out_q`` exactly once as a ``Rollout``. Failures
@@ -354,7 +354,7 @@ class RolloutDispatcher:
             if group.kind != kind or group.rollouts_to_schedule <= 0:
                 continue
             env = envs.get(group.env_name)
-            cost = group.rollouts_to_schedule if env.requires_group_scoring else 1
+            cost = group.rollouts_to_schedule if env.requires_group_scoring or env.config.atomic_group else 1
             if cost <= self.available_permits:
                 return await self.schedule_group_rollout(gid, group)
 
@@ -436,7 +436,7 @@ class RolloutDispatcher:
         else:
             cache_salt = None
 
-        if env.requires_group_scoring:
+        if env.requires_group_scoring or env.config.atomic_group:
             permits = group.rollouts_to_schedule
             group.rollouts_to_schedule = 0
             await self.acquire(permits)

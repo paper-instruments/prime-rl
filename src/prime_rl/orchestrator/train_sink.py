@@ -95,15 +95,15 @@ class TrainSink:
     def in_progress_groups(self) -> list[list[Rollout]]:
         """Per-rollout groups currently accumulating in ``pending_groups`` —
         i.e. groups that haven't hit ``group_size`` yet, so the pipeline log
-        can reflect partial-group progress. Skips group-scoring envs (whose
-        rollouts only make sense as a unit — the user expects per-group
-        fill, not per-rollout, for those)."""
+        can reflect partial-group progress. Skips grouped episodes, whose
+        rollouts only make sense as a unit."""
         out: list[list[Rollout]] = []
         for rollouts in self.pending_groups.values():
             if not rollouts:
                 continue
             env_name = rollouts[0].env_name
-            if self.train_envs.get(env_name).requires_group_scoring:
+            env = self.train_envs.get(env_name)
+            if env.requires_group_scoring or env.config.atomic_group:
                 continue
             out.append(rollouts)
         return out
@@ -175,7 +175,8 @@ class TrainSink:
 
     async def process_group(self, group_id: uuid.UUID) -> None:
         """Finalize one GRPO group: drop errored rollouts (the whole group
-        when ``requires_group_scoring`` and any failed), assign advantages,
+        when group scoring or atomic admission is enabled and any failed),
+        assign advantages,
         run pre-batch filters, append survivors to ``pending_batch``."""
         group = self.pending_groups.pop(group_id, [])
         if not group:
@@ -191,13 +192,14 @@ class TrainSink:
         survivors = [r for r in group if not r.has_error]
         num_errored = len(group) - len(survivors)
 
-        # Group-scoring envs: any failure makes survivors' rewards unsafe
-        # (computed relative to the missing ones)
+        # Group-scoring rewards are unsafe when a member is missing. Atomic
+        # groups independently require all-or-nothing training admission.
         env = self.train_envs.get(env_name)
-        if num_errored > 0 and env.requires_group_scoring:
+        if num_errored > 0 and (env.requires_group_scoring or env.config.atomic_group):
+            reason = "group-scored partial" if env.requires_group_scoring else "atomic partial"
             get_logger().debug(
                 f"Finished group | env={env_name} task_idx={task_idx} | "
-                f"rollouts={len(group)} (errored={num_errored}) | dropped: group-scored partial"
+                f"rollouts={len(group)} (errored={num_errored}) | dropped: {reason}"
             )
             return
         if not survivors:

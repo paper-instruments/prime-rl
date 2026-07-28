@@ -29,8 +29,8 @@ class TrainSource:
         # whose cursor alone is the (monotonic) task_idx stream.
         self.examples: dict[str, list[dict] | None] = {}
         self.cursors: dict[str, int] = {}
-        # Group-scoring envs reserve ``group_size`` permits up front;
-        # per-rollout envs need 1
+        # Grouped episodes reserve ``group_size`` permits up front;
+        # per-rollout envs need 1.
         self.env_costs: dict[str, int] = {}
         for env in self.envs:
             # The orchestrator never loads the env: sample over the task-index
@@ -42,7 +42,9 @@ class TrainSource:
                 self.rng.shuffle(rows)
                 self.examples[env.name] = rows
             self.cursors[env.name] = 0
-            self.env_costs[env.name] = env.config.group_size if env.requires_group_scoring else 1
+            self.env_costs[env.name] = (
+                env.config.group_size if env.requires_group_scoring or env.config.atomic_group else 1
+            )
 
         self.env_names = [e.name for e in self.envs]
         self.weights: list[float] = [float(e.config.ratio) for e in self.envs]

@@ -168,6 +168,10 @@ class EnvConfig(vf.EnvServerConfig):
     factory: EnvironmentFactoryConfig | None = None
     """Optional constructor for a custom v1 environment. Requires an explicit ``name``."""
 
+    atomic_group: bool = False
+    """Run the configured group as one environment episode and reject the
+    complete training group if any returned trace has an error."""
+
     ratio: float = Field(1.0, gt=0)
     """Sampling weight for this environment in the buffer. Relative weights are normalized to probabilities across envs (e.g. [1, 1] and [0.5, 0.5] are equivalent). Defaults to 1, i.e. equal weight per env."""
 

@@ -75,7 +75,7 @@ class EvalSource:
             return None
         head = self.queue[0]
         env = self.eval_envs.get(head["env_name"])
-        cost = env.config.group_size if env.requires_group_scoring else 1
+        cost = env.config.group_size if env.requires_group_scoring or env.config.atomic_group else 1
         if cost > available_permits:
             return None
         return self.queue.popleft()
