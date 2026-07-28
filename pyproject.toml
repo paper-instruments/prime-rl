@@ -119,6 +119,8 @@ environments = [
 # Override torch's pinned cuDNN to fix Conv3d performance regression (torch 2.9 + cuDNN 9.8-9.14)
 # See: https://github.com/pytorch/pytorch/issues/166122
 override-dependencies = [
+    # Daytona's SDK requires aiofiles<24.2; prime-sandboxes has no lower bound.
+    "aiofiles==24.1.0",
     "nvidia-cudnn-cu12>=9.15",
     "nvidia-cutlass-dsl>=4.4.1",
     "transformers==5.6.2",
