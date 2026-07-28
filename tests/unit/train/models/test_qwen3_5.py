@@ -121,7 +121,11 @@ def test_qwen3_5_dense_load_does_not_convert_identity_format(monkeypatch, tmp_pa
 
     model_loading.load_dcp_from_hf(
         model,
-        ModelConfig(name=str(tmp_path), fsdp_cpu_offload=True),
+        ModelConfig(
+            name=str(tmp_path),
+            fsdp_cpu_offload=True,
+            optim_cpu_offload=False,
+        ),
         ParallelDims(dp_replicate=1, dp_shard=1, cp=1, pp=1, ep=1, world_size=1),
     )
 
