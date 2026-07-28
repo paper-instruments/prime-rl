@@ -722,6 +722,15 @@ class OrchestratorConfig(BaseConfig):
             if "group_size" not in env_cfg.model_fields_set:
                 env_cfg.group_size = self.group_size
 
+        assert self.max_inflight_rollouts is not None
+        envs = [*self.train.env, *(self.eval.env if self.eval is not None else [])]
+        for env_cfg in envs:
+            if env_cfg.atomic_group and env_cfg.group_size > self.max_inflight_rollouts:
+                raise ValueError(
+                    f"atomic environment {env_cfg.resolved_name!r} has group_size={env_cfg.group_size}, "
+                    f"which exceeds max_inflight_rollouts={self.max_inflight_rollouts}"
+                )
+
         return self
 
     @model_validator(mode="after")
