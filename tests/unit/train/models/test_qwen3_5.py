@@ -95,8 +95,8 @@ def test_qwen3_5_dense_matches_hf_state_keys_on_meta():
         assert tensor.shape == hf_model.state_dict()[name].shape, name
 
 
-@pytest.mark.parametrize("model_directory", ["Qwen3.5-27B", "Qwen3.6-27B"])
-def test_local_qwen3_5_dense_config_applies_patches_once(monkeypatch, tmp_path, model_directory):
+@pytest.mark.parametrize("model_directory", ["Qwen3.6-27B", "qwen3_6-27B"])
+def test_local_qwen3_6_dense_config_applies_patches(monkeypatch, tmp_path, model_directory):
     local_snapshot = tmp_path / model_directory / "snapshot"
     _tiny_vlm_config().save_pretrained(local_snapshot)
 

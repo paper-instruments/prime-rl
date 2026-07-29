@@ -28,11 +28,9 @@ dependencies = [
     "aiolimiter>=1.2.1",
     "tenacity>=8.2.0",
     "openai>=1.106.1",
-    "openai-agents",
     "orjson>=3.11.0",
     "rich>=14.0.0",
     "setproctitle>=1.3.0",
-    "vllm-router",
     "uvloop>=0.21.0",
     "torchtitan",
     "verifiers[harbor]>=0.2.1",
@@ -118,10 +116,6 @@ environments = [
 # Override torch's pinned cuDNN to fix Conv3d performance regression (torch 2.9 + cuDNN 9.8-9.14)
 # See: https://github.com/pytorch/pytorch/issues/166122
 override-dependencies = [
-    # Daytona's SDK requires aiofiles<24.2; Train installs it into this environment.
-    "aiofiles==24.1.0",
-    # Train's OmegaConf boundary requires the ANTLR 4.9 runtime.
-    "antlr4-python3-runtime==4.9.3",
     "nvidia-cudnn-cu12>=9.15",
     "nvidia-cutlass-dsl>=4.4.1",
     "transformers==5.6.2",
@@ -193,7 +187,6 @@ prime-rl-configs = { path = "packages/prime-rl-configs", editable = true }
 # example live under deps/{verifiers,research-environments}/environments.
 verifiers = { path = "deps/verifiers", editable = true }
 renderers = { path = "deps/renderers", editable = true }
-openai-agents = { git = "https://github.com/paper-instruments/openai-agents-python.git", rev = "801cc72" }
 prime-pydantic-config = { path = "deps/pydantic-config", editable = true }
 torch = { index = "pytorch-cu128" }
 torchvision = { index = "pytorch-cu128" }
