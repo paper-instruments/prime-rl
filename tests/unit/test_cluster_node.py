@@ -127,12 +127,8 @@ def test_prepare_is_idempotent_for_log_links(tmp_path, monkeypatch):
     cluster_node.prepare(config, _cluster())
     cluster_node.prepare(config, _cluster())
 
-    assert (config.output_dir / "logs" / "trainer.log").readlink() == Path(
-        "trainer/node_0.log"
-    )
-    assert (config.output_dir / "logs" / "inference.log").readlink() == Path(
-        "inference/node_0.log"
-    )
+    assert (config.output_dir / "logs" / "trainer.log").readlink() == Path("trainer/node_0.log")
+    assert (config.output_dir / "logs" / "inference.log").readlink() == Path("inference/node_0.log")
 
 
 def test_prepare_rejects_nonzero_rank(tmp_path):
@@ -159,12 +155,8 @@ def test_external_node_renders_shared_placement_worker(tmp_path, monkeypatch):
     assert "--rdzv-id=job_$PRIME_RL_CLUSTER_ID" in script
     assert "WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$PRIME_RL_CLUSTER_ID}" in script
     assert "SLURM_" not in script
-    assert script.index("[ -f .env ] && source .env") < script.index(
-        "export PRIME_RL_NODE_RANK=0"
-    )
-    assert script.index("[ -f .env ] && source .env") < script.index(
-        "export UV_PROJECT_ENVIRONMENT="
-    )
+    assert script.index("[ -f .env ] && source .env") < script.index("export PRIME_RL_NODE_RANK=0")
+    assert script.index("[ -f .env ] && source .env") < script.index("export UV_PROJECT_ENVIRONMENT=")
     subprocess.run(
         ["bash", "-n", (tmp_path / "rank-0" / "cluster_node.sh").as_posix()],
         check=True,
@@ -223,8 +215,7 @@ def test_custom_slurm_template_can_include_shared_worker(tmp_path):
     config = _config(tmp_path, slurm={})
     custom_template = tmp_path / "custom.sbatch.j2"
     custom_template.write_text(
-        "infer_nodes_per_replica={{ infer_nodes_per_replica }}\n"
-        "{% include '_multi_node_rank.sh.j2' %}"
+        "infer_nodes_per_replica={{ infer_nodes_per_replica }}\n{% include '_multi_node_rank.sh.j2' %}"
     )
     config.slurm.template_path = custom_template
     config_dir = tmp_path / "configs"
@@ -267,8 +258,8 @@ def test_disaggregated_slurm_still_renders_shared_worker(tmp_path):
     write_slurm_script(config, config_dir, script_path)
 
     script = script_path.read_text()
-    assert "ROLE=\"prefill\"" in script
-    assert "ROLE=\"decode\"" in script
+    assert 'ROLE="prefill"' in script
+    assert 'ROLE="decode"' in script
     assert "srun --kill-on-bad-exit=1" in script
     assert "export PRIME_RL_POOL_NAMESPACE=slurm" in script
     subprocess.run(["bash", "-n", script_path.as_posix()], check=True)

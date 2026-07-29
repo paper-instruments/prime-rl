@@ -488,28 +488,16 @@ def regular_multi_node_template_context(config: RLConfig, config_dir: Path) -> d
         "router_port": config.inference.server.port if config.inference else 8000,
         "backend_port": config.inference.backend_port if config.inference else 8100,
         "inference_tp": config.inference.parallel.tp if config.inference else 1,
-        "inference_enable_expert_parallel": (
-            config.inference.enable_expert_parallel if config.inference else False
-        ),
-        "inference_data_parallel_rpc_port": (
-            config.inference.data_parallel_rpc_port if config.inference else 29600
-        ),
-        "dp_per_node": (
-            config.deployment.gpus_per_node // config.inference.parallel.tp
-            if config.inference
-            else 1
-        ),
+        "inference_enable_expert_parallel": (config.inference.enable_expert_parallel if config.inference else False),
+        "inference_data_parallel_rpc_port": (config.inference.data_parallel_rpc_port if config.inference else 29600),
+        "dp_per_node": (config.deployment.gpus_per_node // config.inference.parallel.tp if config.inference else 1),
         "kv_offload": offload is not None,
         "kv_offload_mooncake": is_mooncake,
         "kv_offload_cpu_bytes": int(offload.cpu.num_bytes) if is_mooncake else 0,
-        "kv_offload_disk_path": (
-            str(offload.disk.path) if is_mooncake and offload.disk is not None else ""
-        ),
+        "kv_offload_disk_path": (str(offload.disk.path) if is_mooncake and offload.disk is not None else ""),
         "kv_offload_device_name": offload.device_name if is_mooncake else "",
-        "use_nccl_broadcast": config.weight_broadcast is not None
-        and config.weight_broadcast.type == "nccl",
-        "use_zmq_transport": config.rollout_transport is not None
-        and config.rollout_transport.type == "zmq",
+        "use_nccl_broadcast": config.weight_broadcast is not None and config.weight_broadcast.type == "nccl",
+        "use_zmq_transport": config.rollout_transport is not None and config.rollout_transport.type == "zmq",
         "ranks_filter": ",".join(map(str, config.trainer.log.ranks_filter)),
         "orchestrator_on_inference": config.deployment.orchestrator_on_inference,
         "trainer_env_vars": trainer_env_vars,
@@ -615,9 +603,7 @@ def prepare_rl_run(config: RLConfig) -> None:
 
 def rl(config: RLConfig):
     if config.deployment.type == "multi_node" and config.slurm is None:
-        raise ValueError(
-            "Multi-node deployment requires either Slurm or the allocated-cluster entrypoint."
-        )
+        raise ValueError("Multi-node deployment requires either Slurm or the allocated-cluster entrypoint.")
 
     prepare_rl_run(config)
 
