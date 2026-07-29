@@ -62,7 +62,7 @@ LLMD_EOF
 LLMD_EOF
     # grpc-health-port avoids 9003: mooncake_master runs its metrics server on 9003 and
     # shares node 0 with the EPP, so 9003 would fail to bind and kill the EPP.
-    epp --pool-name prime-rl --pool-namespace slurm \
+    epp --pool-name prime-rl --pool-namespace "$PRIME_RL_POOL_NAMESPACE" \
         --config-file "$LLMD_DIR/epp.yaml" \
         --grpc-port 9002 --grpc-health-port 9013 --metrics-port 9090 \
         --secure-serving=false --metrics-endpoint-auth=false --tracing=false \
