@@ -9,6 +9,7 @@ This page covers how to scale `prime-rl` from a single GPU to a 1000-GPU cluster
     - [RL Placement](#rl-placement)
     - [SFT and Torchrun](#sft-and-torchrun)
   - [Multi-Node](#multi-node)
+    - [Externally Allocated RL Clusters](#externally-allocated-rl-clusters)
 - [Parallelism Knobs](#parallelism-knobs)
   - [FSDP](#fsdp)
   - [Expert Parallelism](#expert-parallelism)
@@ -26,7 +27,7 @@ This page covers how to scale `prime-rl` from a single GPU to a 1000-GPU cluster
 
 ## Single-Node vs. Multi-Node Deployment
 
-The `rl`, `sft`, and `inference` entrypoints all accept a `[deployment]` block (`type = "single_node"` or `"multi_node"`) that picks how the trainer / orchestrator / inference processes are placed across hardware. **Single-node** runs locally; **multi-node** currently goes through [SLURM](#slurm) — the launcher writes an sbatch script that places inference replicas, the orchestrator, and the trainer with the right rendezvous endpoints, IPs, ports, and shared-filesystem paths wired in.
+The `rl`, `sft`, and `inference` entrypoints all accept a `[deployment]` block (`type = "single_node"` or `"multi_node"`) that picks how the trainer / orchestrator / inference processes are placed across hardware. **Single-node** runs locally. **Multi-node** normally goes through [SLURM](#slurm); an infrastructure provider that already allocates a gang may instead use PrimeRL's [external-cluster interface](#externally-allocated-rl-clusters).
 
 ### Single-Node
 
@@ -73,7 +74,41 @@ uv run torchrun \
 
 ### Multi-Node
 
-Multi-node deployments (RL or SFT) are launched via [SLURM](#slurm) — set `[deployment] type = "multi_node"` plus the matching `[slurm]` block, and the launcher writes the sbatch script that places inference, orchestrator, and trainer across the requested nodes with the inter-process wiring set up correctly. See [SLURM § Examples](#examples) for full configs.
+Multi-node deployments (RL or SFT) are normally launched via [SLURM](#slurm) — set `[deployment] type = "multi_node"` plus the matching `[slurm]` block, and the launcher writes the sbatch script that places inference, orchestrator, and trainer across the requested nodes with the inter-process wiring set up correctly. See [SLURM § Examples](#examples) for full configs.
+
+#### Externally Allocated RL Clusters
+
+Providers such as Modal can allocate a fixed gang and call PrimeRL once per node. Configure `[external_cluster]` instead of `[slurm]`, then use `build_external_node_plan()` in process or run the equivalent command on every provider rank:
+
+```toml
+[deployment]
+type = "multi_node"
+gpus_per_node = 8
+num_infer_nodes = 1
+num_train_nodes = 1
+
+[external_cluster]
+trainer_rdzv_port = 29500
+consensus_port = 29503
+startup_timeout = 300
+shutdown_timeout = 60
+termination_grace_period = 10
+```
+
+```bash
+uv run external-cluster \
+  --config rl.toml \
+  --rank "$PROVIDER_RANK" \
+  --addresses "${RANK_ORDERED_ADDRESSES[@]}" \
+  --run-id "$UNIQUE_RUN_ID" \
+  --local-state-dir "/tmp/prime-rl/$UNIQUE_RUN_ID/rank-$PROVIDER_RANK"
+```
+
+Provider ranks are ordered as inference nodes first, followed by trainer nodes. The first trainer hosts the orchestrator, torchrun rendezvous, ZMQ rollout transport, and NCCL weight-transfer control plane. Provider rank zero hosts a private all-rank failure-consensus socket. Every rank must receive the same unique run ID, complete rank-ordered IPv4 address list, and resolved configuration.
+
+The provider owns allocation, model materialization, durable storage, and a synchronous per-rank finalizer. PrimeRL owns process placement, endpoint injection, local process groups, and cluster-wide shutdown. The output directory must be new and empty; external launch does not clean or resume an existing run. Each rank writes its own logs and checkpoint shards, and the provider must make those rank-owned files durable before acknowledging finalization. The shared storage must support distinct-file writers; it is not used for live control messages.
+
+The control socket assumes an isolated, single-tenant provider network. A mismatched run ID, topology, configuration, peer disconnect, child failure, or finalizer failure aborts the whole gang. External launch currently supports whole-node, single-node inference replicas, static inference endpoints, dense models, ZMQ rollouts, NCCL weight transfer, and IPv4 addresses.
 
 ## Parallelism Knobs
 

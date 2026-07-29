@@ -152,7 +152,7 @@ class SingleNodeDeploymentConfig(BaseDeploymentConfig):
 class MultiNodeDeploymentConfig(BaseDeploymentConfig):
     type: Literal["multi_node"] = "multi_node"
 
-    num_train_nodes: int
+    num_train_nodes: int = Field(..., ge=1)
     """Training nodes."""
 
     num_infer_nodes: int | None = Field(None, ge=0)
@@ -179,6 +179,23 @@ class MultiNodeDeploymentConfig(BaseDeploymentConfig):
 DeploymentConfig: TypeAlias = Annotated[
     SingleNodeDeploymentConfig | MultiNodeDeploymentConfig, Field(discriminator="type")
 ]
+
+
+class ExternalClusterConfig(BaseConfig):
+    trainer_rdzv_port: int = Field(29500, ge=1, le=65535)
+    """Port for the cross-node torchrun rendezvous on the first trainer node."""
+
+    consensus_port: int = Field(29503, ge=1, le=65535)
+    """Port for external-node readiness, failure, and terminal-state consensus."""
+
+    startup_timeout: float = Field(300.0, gt=0)
+    """Seconds allowed for all externally allocated nodes to join the control plane."""
+
+    shutdown_timeout: float = Field(60.0, gt=0)
+    """Seconds allowed for all nodes to acknowledge coordinated shutdown."""
+
+    termination_grace_period: float = Field(10.0, ge=0)
+    """Seconds between SIGTERM and SIGKILL for Prime-owned local process groups."""
 
 
 class RLConfig(BaseConfig):
@@ -229,7 +246,10 @@ class RLConfig(BaseConfig):
     deployment: DeploymentConfig = SingleNodeDeploymentConfig()
 
     slurm: SlurmConfig | None = None
-    """SLURM configuration. If None, runs locally."""
+    """SLURM launch configuration, mutually exclusive with external_cluster."""
+
+    external_cluster: ExternalClusterConfig | None = None
+    """Provider-neutral externally allocated multi-node launch configuration."""
 
     dry_run: bool = False
     """Only validate and dump resolved configs, then exit early."""
@@ -266,8 +286,9 @@ class RLConfig(BaseConfig):
     @model_validator(mode="after")
     def validate_deployment(self):
         if self.deployment.type == "multi_node":
-            if self.slurm is None:
-                raise ValueError("Must use SLURM for multi-node deployment.")
+            launch_modes = int(self.slurm is not None) + int(self.external_cluster is not None)
+            if launch_modes != 1:
+                raise ValueError("Multi-node deployment requires exactly one of slurm or external_cluster.")
             num_infer_nodes = self.deployment.infer_nodes_per_replica
             if num_infer_nodes > 0 and not self.inference:
                 raise ValueError("Must configure inference when using multi-node deployment with inference nodes.")
@@ -281,6 +302,8 @@ class RLConfig(BaseConfig):
                     "Must use fake data (trainer.data.fake or bench = true) when num_infer_nodes = 0, "
                     "since no orchestrator or inference server will be running."
                 )
+        elif self.external_cluster is not None:
+            raise ValueError("external_cluster requires deployment.type = 'multi_node'.")
         return self
 
     @model_validator(mode="after")
@@ -695,6 +718,88 @@ class RLConfig(BaseConfig):
         return self
 
     @model_validator(mode="after")
+    def validate_external_cluster(self):
+        if self.external_cluster is None:
+            return self
+
+        assert self.deployment.type == "multi_node"
+        if self.deployment.gpus_per_node < 1:
+            raise ValueError("external_cluster requires at least one GPU per node.")
+        if self.deployment.num_infer_replicas != 1:
+            raise ValueError("external_cluster supports exactly one inference replica.")
+        if self.deployment.infer_nodes_per_replica < 1 or self.inference is None:
+            raise ValueError("external_cluster requires at least one inference node.")
+        if self.deployment.orchestrator_on_inference:
+            raise ValueError("external_cluster runs the orchestrator on the first trainer node.")
+        if self.inference.deployment.type != "single_node":
+            raise ValueError("external_cluster initially requires one single-node inference replica per provider node.")
+        if self.inference.deployment.router.type != "vllm-router":
+            raise ValueError("external_cluster does not support the llm-d router.")
+        if self.orchestrator.model.client.elastic is not None or self.orchestrator.model.client.router_url is not None:
+            raise ValueError("external_cluster requires static inference client endpoints.")
+        if self.inference.enable_expert_parallel:
+            raise ValueError("external_cluster initially supports standard dense inference only.")
+        if self.inference.kv_cache_offload is not None:
+            raise ValueError("external_cluster does not support KV-cache offload.")
+        if self.inference.parallel.tp < 1:
+            raise ValueError("external_cluster requires inference.parallel.tp >= 1.")
+        if self.inference.parallel.tp != self.deployment.gpus_per_node:
+            raise ValueError(
+                "external_cluster requires inference.parallel.tp to equal deployment.gpus_per_node "
+                "so every inference node is one whole-node replica."
+            )
+        if self.inference.deployment.gpus_per_node != self.deployment.gpus_per_node:
+            raise ValueError("inference.deployment.gpus_per_node must equal deployment.gpus_per_node.")
+        if self.inference.parallel.dp != 1:
+            raise ValueError("external_cluster requires one inference data-parallel rank per node.")
+        if self.inference.data_parallel_size_local not in (None, 1):
+            raise ValueError("external_cluster requires inference.data_parallel_size_local = 1.")
+        if self.inference.api_server_count != 1:
+            raise ValueError("external_cluster requires inference.api_server_count = 1.")
+        if self.trainer.model.lora is not None:
+            raise ValueError("external_cluster does not support LoRA.")
+        if self.trainer.max_concurrent_runs != 1:
+            raise ValueError("external_cluster currently requires trainer.max_concurrent_runs = 1.")
+        if self.clean_output_dir:
+            raise ValueError("external_cluster does not delete shared output directories; use a unique output_dir.")
+        resume_steps = (
+            self.ckpt.resume_step if self.ckpt is not None else None,
+            self.trainer.ckpt.resume_step if self.trainer.ckpt is not None else None,
+            self.orchestrator.ckpt.resume_step if self.orchestrator.ckpt is not None else None,
+        )
+        if any(resume_step is not None for resume_step in resume_steps):
+            raise ValueError("external_cluster does not yet support checkpoint resume.")
+        if self.weight_broadcast is None or self.weight_broadcast.type != "nccl":
+            raise ValueError("external_cluster requires NCCL weight broadcast.")
+        if self.trainer.rollout_transport.type != "zmq" or self.orchestrator.rollout_transport.type != "zmq":
+            raise ValueError("external_cluster requires ZMQ rollout transport for trainer and orchestrator.")
+        if (
+            self.trainer.rollout_transport.port != self.orchestrator.rollout_transport.port
+            or self.trainer.rollout_transport.hwm != self.orchestrator.rollout_transport.hwm
+        ):
+            raise ValueError("Trainer and orchestrator ZMQ rollout transport settings must match.")
+
+        zmq_port = self.trainer.rollout_transport.port
+        weight_port = self.weight_broadcast.port
+        inference_ports = {
+            "inference API": self.inference.deployment.backend_port,
+            "inference data-parallel RPC": self.inference.data_parallel_rpc_port,
+            "cluster consensus": self.external_cluster.consensus_port,
+        }
+        trainer_ports = {
+            "trainer rendezvous": self.external_cluster.trainer_rdzv_port,
+            "NCCL weight data": weight_port,
+            "ZMQ training batches": zmq_port,
+            "ZMQ microbatches": zmq_port + 1,
+            "ZMQ readiness": zmq_port + 2,
+        }
+        if self.trainer.metrics_server is not None:
+            trainer_ports["trainer metrics"] = self.trainer.metrics_server.port
+        _validate_external_cluster_ports("inference rank zero", inference_ports)
+        _validate_external_cluster_ports("first trainer", trainer_ports)
+        return self
+
+    @model_validator(mode="after")
     def auto_setup_slurm_template(self):
         """Auto-setup the default single-node/multi-node SLURM template if no custom template is provided."""
         if self.slurm is not None and self.slurm.template_path is None:
@@ -706,4 +811,10 @@ class RLConfig(BaseConfig):
                     self.slurm.template_path = templates_dir / "multi_node_rl.sbatch.j2"
         return self
 
-    ### Warnings
+
+def _validate_external_cluster_ports(node: str, ports: dict[str, int]) -> None:
+    invalid = {name: port for name, port in ports.items() if not 1 <= port <= 65535}
+    if invalid:
+        raise ValueError(f"external_cluster {node} ports must be between 1 and 65535: {invalid}.")
+    if len(set(ports.values())) != len(ports):
+        raise ValueError(f"external_cluster {node} ports must not collide: {ports}.")
