@@ -63,6 +63,9 @@ class BenchConfig(BaseConfig):
     output_json: Path | None = None
     """Path to write benchmark results as JSON. If unset, results are only printed to the console."""
 
+    measured_steps: int = Field(3, ge=1)
+    """Number of measured steps after one warmup step."""
+
 
 class IndexCacheConfig(BaseConfig):
     topk_freq: int = Field(1, ge=1)
@@ -502,9 +505,23 @@ class FakeDataLoaderConfig(BaseConfig):
     """Generate separate samples and pack them into a single micro-batch instead of using random tensors."""
 
 
+class ReplayDataLoaderConfig(BaseConfig):
+    path: Path
+    """Path to a prepared RL benchmark artifact directory."""
+
+
 class DataLoaderConfig(BaseConfig):
     fake: FakeDataLoaderConfig | None = None
     """Use a fake data loader sampling random micro-batches (for debugging)."""
+
+    replay: ReplayDataLoaderConfig | None = None
+    """Replay one prepared RL batch through the native sequence packer."""
+
+    @model_validator(mode="after")
+    def select_one_source(self):
+        if self.fake is not None and self.replay is not None:
+            raise ValueError("data.fake and data.replay are mutually exclusive")
+        return self
 
 
 class BaseWeightBroadcastConfig(BaseConfig):
@@ -608,7 +625,7 @@ class TrainerConfig(BaseConfig):
     """Path to write the memory profile to."""
 
     bench: BenchConfig | None = None
-    """Benchmark-mode configuration. When set, ``max_steps`` is forced to 4 and fake data is used."""
+    """Benchmark-mode configuration. Runs one warmup followed by measured steps."""
 
     gc: GCConfig | None = GCConfig()
     """Garbage collection config. Disables automatic GC and runs deterministic collections every N steps to avoid stragglers. Set to null to use Python's default GC behavior."""
@@ -667,11 +684,19 @@ class TrainerConfig(BaseConfig):
     @model_validator(mode="after")
     def auto_setup_bench(self):
         if self.bench is not None:
-            self.max_steps = 4  # 1 Warmup + 3 Benchmark
-            if not self.data.fake:
+            self.max_steps = self.bench.measured_steps + 1
+            if self.data.fake is None and self.data.replay is None:
                 self.data.fake = FakeDataLoaderConfig()
             if self.ckpt:  # Do not checkpoint
                 self.ckpt = None
+        return self
+
+    @model_validator(mode="after")
+    def validate_replay_data(self):
+        if self.data.replay is not None and self.bench is None:
+            raise ValueError("data.replay requires benchmark mode")
+        if self.data.replay is not None and self.max_concurrent_runs != 1:
+            raise ValueError("data.replay requires max_concurrent_runs=1")
         return self
 
     @model_validator(mode="after")

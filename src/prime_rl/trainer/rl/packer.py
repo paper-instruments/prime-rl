@@ -1,3 +1,4 @@
+import gzip
 import os
 import shutil
 import threading
@@ -5,6 +6,10 @@ import time
 from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable, Sequence
+from pathlib import Path
+from typing import Literal
+
+import msgspec
 
 from prime_rl.trainer.batch import multimodal_sample_error, prepare_batch
 from prime_rl.trainer.runs import get_multi_run_manager
@@ -343,6 +348,37 @@ class MultiPacker(BasePacker):
         self.sender.send(all_micro_batches)
 
 
+class ReplayPacker(BasePacker):
+    def __init__(
+        self,
+        path: Path,
+        dp_world_size: int,
+        seq_len: int,
+        pad_to_multiple_of: int,
+        config: TransportConfig,
+        bin_cost: Callable[[Sequence[int]], int],
+        start_step: int = 0,
+    ):
+        super().__init__(dp_world_size, seq_len, pad_to_multiple_of, config, bin_cost, start_step)
+        self.samples = load_replay_batch(path)
+        longest_sample = max(len(sample.token_ids) for sample in self.samples)
+        if longest_sample > seq_len:
+            raise ValueError(f"Replay sample length {longest_sample} exceeds model sequence length {seq_len}")
+
+    def pack(self) -> None:
+        self._heartbeat()
+        micro_batch_grid = prepare_batch(
+            rollouts=self.samples,
+            seq_len=self.seq_len,
+            pad_to_multiple_of=self.pad_to_multiple_of,
+            num_train_workers=self.dp_world_size,
+            idxs=[0] * len(self.samples),
+            num_loras=self.multi_run_manager.max_runs,
+            bin_cost=self.bin_cost,
+        )
+        self.sender.send(micro_batch_grid)
+
+
 def setup_packer(
     dp_world_size: int,
     seq_len: int,
@@ -356,3 +392,72 @@ def setup_packer(
         return SinglePacker(dp_world_size, seq_len, pad_to_multiple_of, transport_config, bin_cost, start_step)
     else:
         return MultiPacker(dp_world_size, seq_len, pad_to_multiple_of, transport_config, bin_cost, start_step)
+
+
+def load_replay_batch(path: Path) -> list[TrainingSample]:
+    manifest_path = path / "manifest.json"
+    records_path = path / "prime.jsonl.gz"
+    if not manifest_path.is_file() or not records_path.is_file():
+        raise FileNotFoundError(f"Prepared RL benchmark artifact is incomplete: {path}")
+
+    manifest = msgspec.json.decode(manifest_path.read_bytes(), type=_ReplayManifest)
+    decoder = msgspec.json.Decoder(type=_ReplayRecord)
+    records: list[_ReplayRecord] = []
+    with gzip.open(records_path, "rb") as file:
+        for line_number, line in enumerate(file, start=1):
+            record = decoder.decode(line)
+            length = len(record.input_ids)
+            if length == 0 or len(record.loss_mask) != length or len(record.rollout_logprobs) != length:
+                raise ValueError(f"Invalid Prime replay record on line {line_number}")
+            records.append(record)
+
+    actual = (
+        len({record.rollout_id for record in records}),
+        len({record.task_id for record in records}),
+        len(records),
+        sum(len(record.input_ids) for record in records),
+        sum(sum(record.loss_mask) for record in records),
+    )
+    expected = (
+        manifest.rollout_count,
+        manifest.task_count,
+        manifest.sample_count,
+        manifest.training_tokens,
+        manifest.loss_tokens,
+    )
+    if actual != expected:
+        raise ValueError(f"Prime replay records do not match manifest totals: expected {expected}, found {actual}")
+
+    return [
+        TrainingSample(
+            token_ids=record.input_ids,
+            mask=record.loss_mask,
+            logprobs=record.rollout_logprobs,
+            temperatures=[1.0] * len(record.input_ids),
+            advantages=[record.advantage] * len(record.input_ids),
+            env_name="benchmark",
+        )
+        for record in records
+    ]
+
+
+class _ReplayManifest(msgspec.Struct, forbid_unknown_fields=True):
+    version: Literal[1]
+    artifact_id: str
+    synthetic_artifact_id: str
+    rollout_count: int
+    task_count: int
+    sample_count: int
+    training_tokens: int
+    loss_tokens: int
+    preparer_revision: str
+
+
+class _ReplayRecord(msgspec.Struct, forbid_unknown_fields=True):
+    sample_id: str
+    rollout_id: str
+    task_id: str
+    input_ids: list[int]
+    loss_mask: list[bool]
+    advantage: float
+    rollout_logprobs: list[float]

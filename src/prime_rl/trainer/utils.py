@@ -397,18 +397,13 @@ def print_benchmark(history: dict[str, list[Any]]) -> None:
     training throughput and overall step time. First first N rows show the
     per-step values, and the last row shows the mean, std, min, and max values.
     """
-    history.pop("step")
-    assert all(len(v) for v in history.values()), "All metrics must have logged the same number of steps"
-
-    # Turn metric history into pd.DataFrame
-    df = pd.DataFrame(dict(history.items()))
     columns = {
         "perf/mfu": "MFU",
         "perf/throughput": "Throughput",
         "time/step": "Step Time",
         "perf/peak_memory": "Peak Memory",
     }
-    df = df[columns.keys()].rename(columns=columns)
+    df = pd.DataFrame({key: history[key] for key in columns}).rename(columns=columns)
     df = df.iloc[1:]  # Exclude first row
 
     # Setup console
@@ -457,20 +452,15 @@ def export_benchmark_json(history: dict[str, list[Any]], output_path: Path) -> N
     """
     Export benchmark results to a JSON file.
 
-    The JSON contains aggregated statistics (mean, std, min, max) for each metric.
+    The JSON contains warmup-separated measurements and aggregate statistics.
     """
-    history = history.copy()
-    history.pop("step", None)
-
-    # Turn metric history into pd.DataFrame
-    df = pd.DataFrame(dict(history.items()))
     columns = {
         "perf/mfu": "mfu",
         "perf/throughput": "throughput",
         "time/step": "step_time",
         "perf/peak_memory": "peak_memory",
     }
-    df = df[columns.keys()].rename(columns=columns)
+    df = pd.DataFrame({key: history[key] for key in columns}).rename(columns=columns)
     df = df.iloc[1:]  # Exclude first warmup row
 
     # Calculate statistics
@@ -481,6 +471,9 @@ def export_benchmark_json(history: dict[str, list[Any]], output_path: Path) -> N
     peak_memory_pct = stats["peak_memory"]["mean"] / total_memory_gib * 100
 
     result = {
+        "warmup_steps": 1,
+        "step_seconds": [float(value) for value in df["step_time"]],
+        "peak_memory_gib": [float(value) for value in df["peak_memory"]],
         "mfu": {
             "mean": float(stats["mfu"]["mean"]),
             "std": float(stats["mfu"]["std"]),

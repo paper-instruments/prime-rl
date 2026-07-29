@@ -150,6 +150,9 @@ def train(config: TrainerConfig):
     logger.info(f"Initializing model ({config.model})")
     loading_from_ckpt_later = config.ckpt and checkpoint_step is not None
     model = setup_model(config.model, parallel_dims, loading_from_ckpt_later)
+    if config.data.replay is not None and config.model.lora is not None:
+        multi_run_manager.reset_run_parameters(0)
+        multi_run_manager.scaling_factors[0] = config.model.lora.alpha / config.model.lora.rank
 
     logger.info(f"Initializing tokenizer ({config.tokenizer})")
     tokenizer = setup_tokenizer(config.tokenizer)
@@ -169,7 +172,7 @@ def train(config: TrainerConfig):
             config.optim,
             list(model.named_parameters()),
             parallel_dims,
-            lora=config.model.lora is not None,
+            lora=config.model.lora is not None and config.data.replay is None,
             cpu_offload=config.model.optim_cpu_offload,
         )
         scheduler = setup_scheduler(optimizer, config.scheduler, config.max_steps, config.optim.lr)
@@ -185,10 +188,10 @@ def train(config: TrainerConfig):
 
     logger.info(f"Using `{config.scheduler.type}` scheduler ({config.scheduler})")
 
-    # Set up weight broadcast (skip when using fake data since there's no inference server)
-    if config.data.fake:
+    # Local benchmark data modes do not have an inference server waiting for weights.
+    if config.data.fake is not None or config.data.replay is not None:
         weight_broadcast = None
-        logger.info("Skipping weight broadcast setup (fake data mode)")
+        logger.info("Skipping weight broadcast setup (local benchmark data mode)")
     else:
         logger.info(f"Initializing weight broadcast ({config.weight_broadcast})")
         weight_broadcast = setup_weight_broadcast(
@@ -251,6 +254,7 @@ def train(config: TrainerConfig):
             config.model.cp,
             build_bin_cost(model.config),
             config.rollout_transport,
+            replay_path=config.data.replay.path if config.data.replay is not None else None,
         )
 
     token_exporter = setup_token_exporter(config, parallel_dims, world, logger)

@@ -7,7 +7,7 @@ from jaxtyping import Bool, Float, Int
 from torch import Tensor
 
 from prime_rl.configs.trainer import FakeDataLoaderConfig
-from prime_rl.trainer.rl.packer import BasePacker, setup_packer
+from prime_rl.trainer.rl.packer import BasePacker, ReplayPacker, setup_packer
 from prime_rl.trainer.runs import get_multi_run_manager
 from prime_rl.trainer.world import get_world
 from prime_rl.transport import (
@@ -187,18 +187,30 @@ class DataLoader:
         pad_to_multiple_of: int,
         bin_cost: Callable[[Sequence[int]], int],
         config: TransportConfig,
+        replay_path: Path | None = None,
     ):
         self.world = get_world()
 
         if self.world.is_master:
-            self.packer: BasePacker = setup_packer(
-                dp_world_size=dp_world_size,
-                seq_len=seq_len,
-                transport_config=config,
-                pad_to_multiple_of=pad_to_multiple_of,
-                bin_cost=bin_cost,
-                start_step=start_step,
-            )
+            if replay_path is not None:
+                self.packer: BasePacker = ReplayPacker(
+                    path=replay_path,
+                    dp_world_size=dp_world_size,
+                    seq_len=seq_len,
+                    pad_to_multiple_of=pad_to_multiple_of,
+                    config=config,
+                    bin_cost=bin_cost,
+                    start_step=start_step,
+                )
+            else:
+                self.packer = setup_packer(
+                    dp_world_size=dp_world_size,
+                    seq_len=seq_len,
+                    transport_config=config,
+                    pad_to_multiple_of=pad_to_multiple_of,
+                    bin_cost=bin_cost,
+                    start_step=start_step,
+                )
 
         non_dp_world_size = self.world.world_size // dp_world_size
         dp_rank = self.world.rank // non_dp_world_size

@@ -368,7 +368,7 @@ class SFTConfig(BaseConfig):
     @model_validator(mode="after")
     def auto_setup_bench(self):
         if self.bench is not None:
-            self.max_steps = 4  # 1 Warmup + 3 Benchmark
+            self.max_steps = self.bench.measured_steps + 1
             if self.ckpt:  # Do not checkpoint
                 self.ckpt = None
         return self
