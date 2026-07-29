@@ -19,7 +19,7 @@ launch_inference_rank() {
     # external-LB runs one engine per process, all with data_parallel_rank_local 0, so the
     # lookup socket name collides on bind if the dir is shared node-wide. $port is unique per
     # rank on the node. Node-local /tmp also avoids inheriting an absent submit-node TMPDIR.
-    local rpcbase="/tmp/vllm-rpc-$USER-$SLURM_JOB_ID-$port"
+    local rpcbase="/tmp/vllm-rpc-$USER-$PRIME_RL_CLUSTER_ID-$port"
     mkdir -p "$rpcbase"
     local -a cmd=(uv run inference @ "$CONFIG_PATH"
         --server.host 0.0.0.0 --server.port "$port"

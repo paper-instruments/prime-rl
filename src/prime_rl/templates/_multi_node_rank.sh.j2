@@ -1,0 +1,238 @@
+read -ra HOSTNAMES <<< "$HOSTNAMES_STR"
+TRAIN_HOSTS=( "${HOSTNAMES[@]:$NUM_INFER_NODES}" )
+
+{% if num_infer_nodes > 0 -%}
+INFER_HOSTS=( "${HOSTNAMES[@]:0:$NUM_INFER_NODES}" )
+INFER_URLS="http://${INFER_HOSTS[0]}:${ROUTER_PORT}/v1"
+ADMIN_URLS=""
+ROUTER_ARGS=""
+{% if is_disaggregated -%}
+for ((r=0; r<NUM_INFER_REPLICAS; r++)); do
+    replica_base=$((r * NODES_PER_INFER_REPLICA))
+    for ((p=0; p<NUM_PREFILL_NODES; p++)); do
+        host="${INFER_HOSTS[$((replica_base + p))]}"
+        for ((k=0; k<INFERENCE_DP_LOCAL; k++)); do
+            ADMIN_URLS="${ADMIN_URLS:+$ADMIN_URLS }http://${host}:$((PREFILL_PORT + k))/v1"
+            ROUTER_ARGS="$ROUTER_ARGS --prefill http://${host}:$((PREFILL_PORT + k))"
+        done
+    done
+    for ((d=0; d<NUM_DECODE_NODES; d++)); do
+        host="${INFER_HOSTS[$((replica_base + NUM_PREFILL_NODES + d))]}"
+        for ((k=0; k<INFERENCE_DP_LOCAL; k++)); do
+            ADMIN_URLS="${ADMIN_URLS:+$ADMIN_URLS }http://${host}:$((DECODE_PORT + k))/v1"
+            ROUTER_ARGS="$ROUTER_ARGS --decode http://${host}:$((DECODE_PORT + k))"
+        done
+    done
+done
+{%- else -%}
+for ((n=0; n<NUM_INFER_NODES; n++)); do
+    host="${INFER_HOSTS[$n]}"
+    for ((k=0; k<INFERENCE_DP_LOCAL; k++)); do
+        ADMIN_URLS="${ADMIN_URLS:+$ADMIN_URLS }http://${host}:$((BACKEND_PORT + k))/v1"
+        ROUTER_ARGS="$ROUTER_ARGS http://${host}:$((BACKEND_PORT + k))"
+    done
+done
+{%- endif %}
+export INFER_URLS
+export ADMIN_URLS
+export ROUTER_ARGS
+{%- endif %}
+
+export MASTER_ADDR="${HOSTNAMES[$NUM_INFER_NODES]}"
+export MASTER_PORT=29500
+
+echo "HOSTNAMES=${HOSTNAMES[*]}"
+echo "TRAIN_HOSTS=${TRAIN_HOSTS[*]}"
+{% if num_infer_nodes > 0 -%}
+echo "INFER_HOSTS=${INFER_HOSTS[*]}"
+echo "INFER_URLS=${INFER_URLS}"
+echo "ADMIN_URLS=${ADMIN_URLS}"
+{%- endif %}
+echo "MASTER_ADDR=${MASTER_ADDR}"
+echo "MASTER_PORT=${MASTER_PORT}"
+
+{% if num_infer_nodes > 0 -%}
+if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
+    INFER_NODE_RANK=$PRIME_RL_NODE_RANK
+{%- for key, value in inference_env_vars.items() %}
+    export {{ key }}="{{ value }}"
+{%- endfor %}
+    LOCAL_IP=$PRIME_RL_LOCAL_ADDRESS
+
+{%- if kv_offload %}
+    ulimit -l unlimited
+{%- endif %}
+{%- if kv_offload_mooncake %}
+{% include "_mooncake_store.sh.j2" %}
+{%- endif %}
+
+    REPLICA_IDX=$((INFER_NODE_RANK / NODES_PER_INFER_REPLICA))
+    RANK_IN_REPLICA=$((INFER_NODE_RANK % NODES_PER_INFER_REPLICA))
+
+    echo "INFER_NODE_RANK=$INFER_NODE_RANK REPLICA=$REPLICA_IDX RANK_IN_REPLICA=$RANK_IN_REPLICA LOCAL_IP=$LOCAL_IP" \
+        | tee $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
+
+    CONFIG_PATH="$CONFIG_DIR/inference.toml"
+{% include "_launch_rank.sh.j2" %}
+{% include "_launch_router.sh.j2" %}
+
+{% if is_disaggregated -%}
+    GLOO_IFNAME=$(ip -o -4 addr show to "$LOCAL_IP" 2>/dev/null | awk "{print \$2; exit}")
+    if [ -n "$GLOO_IFNAME" ]; then export GLOO_SOCKET_IFNAME=$GLOO_IFNAME; fi
+    rdma_ports() {
+        for port in /sys/class/infiniband/*/ports/*; do
+            [ "$(cat "$port/link_layer" 2>/dev/null)" = "$1" ] || continue
+            grep -q ACTIVE "$port/state" 2>/dev/null || continue
+            dev=${port%/ports/*}
+            echo "$(basename "$dev"):$(basename "$port")"
+        done | paste -sd,
+    }
+    UCX_NET_DEVICES=$(rdma_ports InfiniBand)
+    [ -n "$UCX_NET_DEVICES" ] || UCX_NET_DEVICES=$(rdma_ports Ethernet)
+    export UCX_NET_DEVICES=${UCX_NET_DEVICES:-all}
+    export LD_LIBRARY_PATH="$PROJECT_DIR/third_party/ucx/lib:$PROJECT_DIR/third_party/ucx/lib/ucx:${LD_LIBRARY_PATH:-}"
+    export VLLM_NIXL_SIDE_CHANNEL_HOST=$LOCAL_IP
+    export VLLM_NIXL_SIDE_CHANNEL_PORT=5600
+
+    DECODE_COMPILE_CFG='"'"'{"cudagraph_mode":"FULL_DECODE_ONLY"}'"'"'
+    REPLICA_BASE=$((REPLICA_IDX * NODES_PER_INFER_REPLICA))
+
+    if [ "$RANK_IN_REPLICA" -lt "$NUM_PREFILL_NODES" ]; then
+        ROLE="prefill"
+        SUB_REPLICA=$((RANK_IN_REPLICA / NODES_PER_PREFILL_REPLICA))
+        ROLE_RANK=$((RANK_IN_REPLICA % NODES_PER_PREFILL_REPLICA))
+        DP=$((NODES_PER_PREFILL_REPLICA * INFERENCE_DP_LOCAL))
+        PORT=$PREFILL_PORT
+        START_RANK=$((ROLE_RANK * INFERENCE_DP_LOCAL))
+        HEAD_HOST="${HOSTNAMES[$((REPLICA_BASE + SUB_REPLICA * NODES_PER_PREFILL_REPLICA))]}"
+{% for key, value in prefill_env_vars.items() %}
+        export {{ key }}="{{ value }}"
+{% endfor %}
+        ROLE_EXTRA="\"all2all_backend\": \"deepep_high_throughput\"{{ prefill_vllm_extra_json }}"
+    else
+        export UCX_NET_DEVICES=mlx5_0:1
+        ROLE="decode"
+        RANK_IN_DECODE=$((RANK_IN_REPLICA - NUM_PREFILL_NODES))
+        SUB_REPLICA=$((RANK_IN_DECODE / NODES_PER_DECODE_REPLICA))
+        ROLE_RANK=$((RANK_IN_DECODE % NODES_PER_DECODE_REPLICA))
+        DP=$((NODES_PER_DECODE_REPLICA * INFERENCE_DP_LOCAL))
+        PORT=$DECODE_PORT
+        START_RANK=$((ROLE_RANK * INFERENCE_DP_LOCAL))
+        HEAD_HOST="${HOSTNAMES[$((REPLICA_BASE + NUM_PREFILL_NODES + SUB_REPLICA * NODES_PER_DECODE_REPLICA))]}"
+{% for key, value in decode_env_vars.items() %}
+        export {{ key }}="{{ value }}"
+{% endfor %}
+        ROLE_EXTRA="\"all2all_backend\": \"deepep_low_latency\", \"compilation_config\": $DECODE_COMPILE_CFG{{ decode_vllm_extra_json }}"
+    fi
+
+    echo "ROLE=$ROLE REPLICA=$REPLICA_IDX SUB_REPLICA=$SUB_REPLICA ROLE_RANK=$ROLE_RANK DP=$DP PORT=$PORT" \
+        | tee -a $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
+
+    if [ "$INFER_NODE_RANK" -eq 0 ]; then
+        launch_router pd "$ROUTER_ARGS" "$ROUTER_PORT" "{{ router.policy }}" "$OUTPUT_DIR/logs/inference/router.log"
+    fi
+{%- if router.type == "llm-d" %}
+    if [ "$ROLE" = "decode" ]; then
+        SIDECAR_LOG="$OUTPUT_DIR/logs/inference/sidecar_${INFER_NODE_RANK}.log"
+        echo "Starting pd-sidecar on $LOCAL_IP:$DECODE_SIDECAR_PORT(+rank) -> vLLM $DECODE_PORT(+rank)" | tee $SIDECAR_LOG
+        export PATH="$PROJECT_DIR/third_party/llmd/bin:$PATH"
+        pd-sidecar \
+            --port $DECODE_SIDECAR_PORT \
+            --vllm-port $DECODE_PORT \
+            --kv-connector nixlv2 \
+            --secure-proxy=false \
+            --enable-ssrf-protection=false \
+            --inference-pool prime-rl \
+            --data-parallel-size $INFERENCE_DP_LOCAL \
+            >> $SIDECAR_LOG 2>&1 &
+    fi
+{%- endif %}
+
+    if [ "$ROLE_RANK" -eq 0 ]; then DP_ADDR=$LOCAL_IP; else DP_ADDR=$HEAD_HOST; fi
+    for k in $(seq 0 $((INFERENCE_DP_LOCAL - 1))); do
+        GLOBAL_RANK=$((START_RANK + k))
+        RANK_GPUS=$(seq -s, $((k * INFERENCE_TP)) $((k * INFERENCE_TP + INFERENCE_TP - 1)))
+        RANK_EXTRA="{\"data_parallel_address\": \"$DP_ADDR\", \"data_parallel_rank\": $GLOBAL_RANK, $ROLE_EXTRA}"
+        launch_inference_rank "$((PORT + k))" "$RANK_GPUS" "$DP" "$INFERENCE_DATA_PARALLEL_RPC_PORT" "$RANK_EXTRA" "$((5600 + k))" "$(rank_log "$INFER_NODE_RANK" "$k")"
+    done
+{%- else -%}
+    if [ "$INFER_NODE_RANK" -eq 0 ]; then
+        launch_router regular "$ROUTER_ARGS" "$ROUTER_PORT" "{{ router.policy }}" "$OUTPUT_DIR/logs/inference/router.log"
+    fi
+
+    REPLICA_HEAD_HOST="${HOSTNAMES[$((REPLICA_IDX * NODES_PER_INFER_REPLICA))]}"
+    INFER_GROUP_DP=$((NODES_PER_INFER_REPLICA * INFERENCE_DP_LOCAL))
+    if [ "$RANK_IN_REPLICA" -eq 0 ]; then DP_ADDR="$LOCAL_IP"; else DP_ADDR="$REPLICA_HEAD_HOST"; fi
+    for ((d=0; d<INFERENCE_DP_LOCAL; d++)); do
+        RANK_GPUS=$(seq -s, $((d * INFERENCE_TP)) $((d * INFERENCE_TP + INFERENCE_TP - 1)))
+        RANK_LOG=$(rank_log "$INFER_NODE_RANK" "$d")
+        if [ "$INFERENCE_ENABLE_EXPERT_PARALLEL" -eq 1 ] && [ "$INFER_GROUP_DP" -gt 1 ]; then
+            GLOBAL_DP_RANK=$((RANK_IN_REPLICA * INFERENCE_DP_LOCAL + d))
+            RANK_EXTRA="{\"data_parallel_rank\": $GLOBAL_DP_RANK, \"data_parallel_address\": \"$DP_ADDR\"}"
+            launch_inference_rank "$((BACKEND_PORT + d))" "$RANK_GPUS" "$INFER_GROUP_DP" "$INFERENCE_DATA_PARALLEL_RPC_PORT" "$RANK_EXTRA" "" "$RANK_LOG"
+        else
+            launch_inference_rank "$((BACKEND_PORT + d))" "$RANK_GPUS" 1 "" "" "" "$RANK_LOG"
+        fi
+    done
+{%- endif %}
+
+else
+    TRAIN_NODE_RANK=$((PRIME_RL_NODE_RANK - NUM_INFER_NODES))
+{%- else %}
+    TRAIN_NODE_RANK=$PRIME_RL_NODE_RANK
+{%- endif %}
+
+{%- for key, value in trainer_env_vars.items() %}
+    export {{ key }}="{{ value }}"
+{%- endfor %}
+
+    echo "$HOSTNAMES_STR" | tee $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
+
+    WANDB_SHARED_LABEL=trainer uv run torchrun \
+        --role=trainer \
+        --nnodes=$NUM_TRAIN_NODES \
+        --nproc-per-node=$GPUS_PER_NODE \
+        --node-rank=$TRAIN_NODE_RANK \
+        --rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT \
+        --rdzv-id=job_$PRIME_RL_CLUSTER_ID \
+        --log-dir=$OUTPUT_DIR/logs/trainer/torchrun \
+        --tee=3 \
+        --redirects=3 \
+        --local-ranks-filter={{ ranks_filter }} \
+        -m prime_rl.trainer.rl.train \
+        @ $CONFIG_DIR/trainer.toml \
+        {% if use_zmq_transport %}--rollout_transport.host $MASTER_ADDR \
+        {% endif %}2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log &
+{% if num_infer_nodes > 0 %}    fi{% endif %}
+{% if num_infer_nodes > 0 %}
+{% if orchestrator_on_inference %}ORCH_PROCID=$((NUM_INFER_NODES - 1)){% else %}ORCH_PROCID=$NUM_INFER_NODES{% endif %}
+if [ "$PRIME_RL_NODE_RANK" -eq "$ORCH_PROCID" ]; then
+    ORCHESTRATOR_ARGS="@ $CONFIG_DIR/orchestrator.toml"
+    ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --model.client.base-url $INFER_URLS"
+    ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --model.client.admin-base-url $ADMIN_URLS"
+{%- if orchestrator_env_vars %}
+{%- for key, value in orchestrator_env_vars.items() %}
+    export {{ key }}="{{ value }}"
+{%- endfor %}
+{%- endif %}
+    {% if use_nccl_broadcast %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --weight_broadcast.host $MASTER_ADDR"
+    {% endif %}{% if use_zmq_transport %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --rollout_transport.host $MASTER_ADDR"
+    {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator $ORCHESTRATOR_ARGS \
+        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log &
+fi
+{% endif %}
+
+wait -n
+EXIT_CODE=$?
+REMAINING_PIDS=$(jobs -p)
+{%- if cleanup_grace_period %}
+if [ "$EXIT_CODE" -ne 0 ]; then
+    echo "[$(hostname)] component exited with code $EXIT_CODE - waiting up to {{ cleanup_grace_period }}s for in-flight checkpoints to flush before teardown"
+    sleep {{ cleanup_grace_period }}
+fi
+{%- endif %}
+echo "[$(hostname)] tearing down (exit code $EXIT_CODE) - terminating remaining processes"
+for pid in $REMAINING_PIDS; do
+    kill -TERM $pid 2>/dev/null || true
+done
+exit $EXIT_CODE

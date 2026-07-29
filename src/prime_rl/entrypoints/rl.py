@@ -16,7 +16,7 @@ from prime_rl.configs.algorithm import FrozenModelConfig
 from prime_rl.configs.inference import VllmRouterConfig
 from prime_rl.configs.rl import RLConfig
 from prime_rl.entrypoints.inference import vllm_overrides_fragment
-from prime_rl.utils.config import cli, to_toml_dict
+from prime_rl.utils.config import cli, find_package_resource, to_toml_dict
 from prime_rl.utils.logger import get_logger, setup_logger
 from prime_rl.utils.pathing import (
     clean_future_steps,
@@ -363,7 +363,11 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
     assert config.slurm is not None
     assert config.slurm.template_path is not None
 
-    env = Environment(loader=FileSystemLoader(config.slurm.template_path.parent), keep_trailing_newline=True)
+    template_dirs = [config.slurm.template_path.parent]
+    package_templates = find_package_resource("templates")
+    if package_templates is not None and package_templates not in template_dirs:
+        template_dirs.append(package_templates)
+    env = Environment(loader=FileSystemLoader(template_dirs), keep_trailing_newline=True)
     template = env.get_template(config.slurm.template_path.name)
 
     offload = config.inference.kv_cache_offload if config.inference is not None else None
@@ -442,35 +446,76 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
     else:
         script = template.render(
             **config.slurm.template_vars,
-            is_disaggregated=False,
-            config_dir=config_dir,  # TODO: should prob have each subconfig path separately
-            output_dir=config.output_dir,
-            orchestrator_output_dir=config.orchestrator.output_dir,
-            num_train_nodes=config.deployment.num_train_nodes,
-            num_infer_nodes=config.deployment.total_infer_nodes,
-            nodes_per_infer_replica=config.deployment.infer_nodes_per_replica,
-            num_infer_replicas=config.deployment.num_infer_replicas,
-            gpus_per_node=config.deployment.gpus_per_node,
-            router=config.inference.router if config.inference else VllmRouterConfig(),
-            router_port=config.inference.server.port if config.inference else 8000,
-            infer_nodes_per_replica=config.deployment.infer_nodes_per_replica,
-            backend_port=config.inference.backend_port if config.inference else 8100,
-            inference_tp=config.inference.parallel.tp if config.inference else 1,
-            inference_enable_expert_parallel=config.inference.enable_expert_parallel if config.inference else False,
-            inference_data_parallel_rpc_port=config.inference.data_parallel_rpc_port if config.inference else 29600,
-            dp_per_node=(config.deployment.gpus_per_node // config.inference.parallel.tp) if config.inference else 1,
-            **mooncake_vars,
-            use_nccl_broadcast=config.weight_broadcast is not None and config.weight_broadcast.type == "nccl",
-            use_zmq_transport=config.rollout_transport is not None and config.rollout_transport.type == "zmq",
-            ranks_filter=",".join(map(str, config.trainer.log.ranks_filter)),
-            orchestrator_on_inference=config.deployment.orchestrator_on_inference,
-            trainer_env_vars=trainer_env_vars,
-            orchestrator_env_vars=orchestrator_env_vars,
-            inference_env_vars=inference_env_vars,
+            **regular_multi_node_template_context(config, config_dir),
         )
 
     script_path.parent.mkdir(parents=True, exist_ok=True)
     script_path.write_text(script)
+
+
+def regular_multi_node_template_context(config: RLConfig, config_dir: Path) -> dict:
+    """Build the placement context shared by Slurm and external allocators."""
+    assert config.deployment.type == "multi_node"
+    assert config.inference is None or config.inference.deployment.type != "disaggregated"
+
+    trainer_env_vars = {
+        **DEFAULT_COMMON_ENV_VARS,
+        **DEFAULT_TRAINER_ENV_VARS,
+        **config.env_vars,
+        **config.trainer.env_vars,
+    }
+    orchestrator_env_vars = {**DEFAULT_COMMON_ENV_VARS, **config.env_vars, **config.orchestrator.env_vars}
+    inference_env_vars = (
+        {**DEFAULT_COMMON_ENV_VARS, **DEFAULT_INFERENCE_ENV_VARS, **config.env_vars, **config.inference.env_vars}
+        if config.inference
+        else {}
+    )
+    offload = config.inference.kv_cache_offload if config.inference is not None else None
+    is_mooncake = offload is not None and offload.type == "mooncake"
+
+    return {
+        "is_disaggregated": False,
+        "config_dir": config_dir,
+        "output_dir": config.output_dir,
+        "orchestrator_output_dir": config.orchestrator.output_dir,
+        "num_train_nodes": config.deployment.num_train_nodes,
+        "num_infer_nodes": config.deployment.total_infer_nodes,
+        "nodes_per_infer_replica": config.deployment.infer_nodes_per_replica,
+        "infer_nodes_per_replica": config.deployment.infer_nodes_per_replica,
+        "num_infer_replicas": config.deployment.num_infer_replicas,
+        "gpus_per_node": config.deployment.gpus_per_node,
+        "router": config.inference.router if config.inference else VllmRouterConfig(),
+        "router_port": config.inference.server.port if config.inference else 8000,
+        "backend_port": config.inference.backend_port if config.inference else 8100,
+        "inference_tp": config.inference.parallel.tp if config.inference else 1,
+        "inference_enable_expert_parallel": (
+            config.inference.enable_expert_parallel if config.inference else False
+        ),
+        "inference_data_parallel_rpc_port": (
+            config.inference.data_parallel_rpc_port if config.inference else 29600
+        ),
+        "dp_per_node": (
+            config.deployment.gpus_per_node // config.inference.parallel.tp
+            if config.inference
+            else 1
+        ),
+        "kv_offload": offload is not None,
+        "kv_offload_mooncake": is_mooncake,
+        "kv_offload_cpu_bytes": int(offload.cpu.num_bytes) if is_mooncake else 0,
+        "kv_offload_disk_path": (
+            str(offload.disk.path) if is_mooncake and offload.disk is not None else ""
+        ),
+        "kv_offload_device_name": offload.device_name if is_mooncake else "",
+        "use_nccl_broadcast": config.weight_broadcast is not None
+        and config.weight_broadcast.type == "nccl",
+        "use_zmq_transport": config.rollout_transport is not None
+        and config.rollout_transport.type == "zmq",
+        "ranks_filter": ",".join(map(str, config.trainer.log.ranks_filter)),
+        "orchestrator_on_inference": config.deployment.orchestrator_on_inference,
+        "trainer_env_vars": trainer_env_vars,
+        "orchestrator_env_vars": orchestrator_env_vars,
+        "inference_env_vars": inference_env_vars,
+    }
 
 
 def rl_slurm(config: RLConfig):
@@ -534,7 +579,8 @@ def rl_slurm(config: RLConfig):
     logger.success(f"{result.stdout.strip()}\n\n{log_message}")
 
 
-def rl(config: RLConfig):
+def prepare_rl_run(config: RLConfig) -> None:
+    """Prepare shared output state once before an allocator launches workers."""
     resuming = config.ckpt is not None and config.ckpt.resume_step is not None
     clean = config.clean_output_dir and not os.environ.get("NEVER_CLEAN_OUTPUT_DIR")
     ckpt_output_dir = config.ckpt.output_dir if config.ckpt else None
@@ -565,6 +611,15 @@ def rl(config: RLConfig):
         from prime_rl.trainer.model import pre_download_model
 
         pre_download_model(config.trainer.model.name)
+
+
+def rl(config: RLConfig):
+    if config.deployment.type == "multi_node" and config.slurm is None:
+        raise ValueError(
+            "Multi-node deployment requires either Slurm or the allocated-cluster entrypoint."
+        )
+
+    prepare_rl_run(config)
 
     if config.slurm is not None:
         rl_slurm(config)
