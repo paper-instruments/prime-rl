@@ -6,6 +6,8 @@ import torch
 from transformers.models.qwen3_5.configuration_qwen3_5 import Qwen3_5Config, Qwen3_5TextConfig, Qwen3_5VisionConfig
 from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5ForCausalLM as HFQwen3_5ForCausalLM
 
+from prime_rl.configs.trainer import ModelConfig
+from prime_rl.trainer import model as model_loading
 from prime_rl.trainer.models.layers.attn import FlashAttention, substitute_ring_attn
 from prime_rl.trainer.models.qwen3_5 import Qwen3_5ForCausalLM, Qwen3_5Model
 from prime_rl.trainer.models.qwen3_5.modeling_qwen3_5 import Qwen3_5GatedFlashAttention
@@ -91,6 +93,40 @@ def test_qwen3_5_dense_matches_hf_state_keys_on_meta():
     assert set(prime_model.state_dict()) == set(hf_model.state_dict())
     for name, tensor in prime_model.state_dict().items():
         assert tensor.shape == hf_model.state_dict()[name].shape, name
+
+
+@pytest.mark.parametrize("model_directory", ["Qwen3.5-27B", "Qwen3.6-27B"])
+def test_local_qwen3_5_dense_config_applies_patches_once(monkeypatch, tmp_path, model_directory):
+    local_snapshot = tmp_path / model_directory / "snapshot"
+    _tiny_vlm_config().save_pretrained(local_snapshot)
+
+    class StubModel:
+        @classmethod
+        def from_config(cls, loaded_config, **kwargs):
+            assert loaded_config.model_type == "qwen3_5"
+            model = torch.nn.Module()
+            model.lm_head = torch.nn.Linear(
+                1,
+                1,
+                bias=False,
+                device="meta",
+                dtype=kwargs["dtype"],
+            )
+            return model
+
+    patches = [MagicMock(), MagicMock(), MagicMock()]
+    monkeypatch.setattr(model_loading, "_patch_qwen3_5_text_position_ids", patches[0])
+    monkeypatch.setattr(model_loading, "_patch_qwen3_5_moe_conversion_mapping", patches[1])
+    monkeypatch.setattr(model_loading, "_patch_qwen3_5_linear_attn_varlen", patches[2])
+    monkeypatch.setattr(model_loading, "get_custom_vlm_cls", lambda _: StubModel)
+
+    model_loading.get_model(
+        ModelConfig(name=str(local_snapshot), attn="flash_attention_2"),
+        device=torch.device("meta"),
+    )
+
+    for patch in patches:
+        patch.assert_called_once_with()
 
 
 @pytest.mark.parametrize("attn_impl", ["flash_attention_3", "kernels-community/vllm-flash-attn3"])
