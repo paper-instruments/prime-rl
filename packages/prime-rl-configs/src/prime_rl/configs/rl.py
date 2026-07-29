@@ -727,8 +727,8 @@ class RLConfig(BaseConfig):
             raise ValueError("external_cluster requires at least one GPU per node.")
         if self.deployment.num_infer_replicas != 1:
             raise ValueError("external_cluster supports exactly one inference replica.")
-        if self.deployment.infer_nodes_per_replica < 1 or self.inference is None:
-            raise ValueError("external_cluster requires at least one inference node.")
+        if self.deployment.infer_nodes_per_replica != 1 or self.inference is None:
+            raise ValueError("external_cluster initially requires exactly one inference node.")
         if self.deployment.orchestrator_on_inference:
             raise ValueError("external_cluster runs the orchestrator on the first trainer node.")
         if self.inference.deployment.type != "single_node":

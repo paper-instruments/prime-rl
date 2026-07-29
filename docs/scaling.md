@@ -108,7 +108,7 @@ Provider ranks are ordered as inference nodes first, followed by trainer nodes. 
 
 The provider owns allocation, model materialization, durable storage, and a synchronous per-rank finalizer. PrimeRL owns process placement, endpoint injection, local process groups, and cluster-wide shutdown. The output directory must be new and empty; external launch does not clean or resume an existing run. Each rank writes its own logs and checkpoint shards, and the provider must make those rank-owned files durable before acknowledging finalization. The shared storage must support distinct-file writers; it is not used for live control messages.
 
-The control socket assumes an isolated, single-tenant provider network. A mismatched run ID, topology, configuration, peer disconnect, child failure, or finalizer failure aborts the whole gang. External launch currently supports whole-node, single-node inference replicas, static inference endpoints, dense models, ZMQ rollouts, NCCL weight transfer, and IPv4 addresses.
+The control socket assumes an isolated, single-tenant provider network. A mismatched run ID, topology, configuration, peer disconnect, child failure, or finalizer failure aborts the whole gang. External launch currently supports exactly one whole-node inference server, static inference endpoints, dense models, ZMQ rollouts, NCCL weight transfer, and IPv4 addresses.
 
 ## Parallelism Knobs
 

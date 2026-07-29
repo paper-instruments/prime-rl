@@ -265,6 +265,17 @@ def test_external_cluster_rejects_unsafe_run_id(tmp_path, run_id):
         ),
         (
             {
+                "deployment": {
+                    "type": "multi_node",
+                    "gpus_per_node": 1,
+                    "num_train_nodes": 2,
+                    "num_infer_nodes": 2,
+                },
+            },
+            "exactly one inference node",
+        ),
+        (
+            {
                 "orchestrator": {
                     "rollout_transport": {
                         "type": "zmq",
