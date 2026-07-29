@@ -1,5 +1,6 @@
 import importlib.metadata
 import json
+import shutil
 from pathlib import Path
 
 import renderers
@@ -31,3 +32,7 @@ def test_openai_agents_resolves_to_patched_fork_commit():
         "commit_id": AGENTS_SDK_COMMIT,
         "requested_revision": AGENTS_SDK_REVISION,
     }
+
+
+def test_default_inference_router_is_installed():
+    assert shutil.which("vllm-router") is not None
