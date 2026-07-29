@@ -672,6 +672,10 @@ def train(config: TrainerConfig):
         throughput = perf_counter.get_step_tokens_per_second(num_tokens, forward_backward_time)
         mfu = perf_counter.get_step_mfu(num_tokens, forward_backward_time)
         peak_memory = torch.cuda.max_memory_reserved() / 1024**3  # GiB
+        if config.bench is not None:
+            peak_memory_tensor = torch.tensor(peak_memory, device="cuda")
+            dist.all_reduce(peak_memory_tensor, op=dist.ReduceOp.MAX)
+            peak_memory = peak_memory_tensor.item()
 
         # Log step metrics
         step_time = time.perf_counter() - step_start_time
