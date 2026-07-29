@@ -47,9 +47,7 @@ class AllocatedCluster:
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             raise ValueError(f"Invalid allocated-cluster environment: {error}") from error
 
-        if not isinstance(addresses_value, list) or not all(
-            isinstance(address, str) for address in addresses_value
-        ):
+        if not isinstance(addresses_value, list) or not all(isinstance(address, str) for address in addresses_value):
             raise ValueError("PRIME_RL_NODE_ADDRESSES_JSON must be a JSON array of strings.")
         addresses = tuple(addresses_value)
         pool_namespace = os.environ.get("PRIME_RL_POOL_NAMESPACE", "allocated")
@@ -68,17 +66,13 @@ class AllocatedCluster:
         if self.node_count < 1:
             raise ValueError("PRIME_RL_NODE_COUNT must be positive.")
         if len(self.addresses) != self.node_count:
-            raise ValueError(
-                f"Expected {self.node_count} node addresses, received {len(self.addresses)}."
-            )
+            raise ValueError(f"Expected {self.node_count} node addresses, received {len(self.addresses)}.")
         if len(set(self.addresses)) != len(self.addresses):
             raise ValueError("Allocated-cluster addresses must be unique.")
         if not 0 <= self.rank < self.node_count:
             raise ValueError(f"Node rank {self.rank} is outside world size {self.node_count}.")
         if self.local_address != self.addresses[self.rank]:
-            raise ValueError(
-                "PRIME_RL_LOCAL_ADDRESS must equal the address at PRIME_RL_NODE_RANK."
-            )
+            raise ValueError("PRIME_RL_LOCAL_ADDRESS must equal the address at PRIME_RL_NODE_RANK.")
         if not all(_HOST_PATTERN.fullmatch(address) for address in self.addresses):
             raise ValueError("Allocated-cluster addresses contain an unsupported character.")
         if not _CLUSTER_ID_PATTERN.fullmatch(self.cluster_id):
@@ -101,12 +95,8 @@ def prepare(config: RLConfig, cluster: AllocatedCluster) -> str:
         inference_log = config.output_dir / "logs" / "inference.log"
         trainer_log.unlink(missing_ok=True)
         inference_log.unlink(missing_ok=True)
-        trainer_log.symlink_to(
-            "trainer/node_0.log", target_is_directory=False
-        )
-        inference_log.symlink_to(
-            "inference/node_0.log", target_is_directory=False
-        )
+        trainer_log.symlink_to("trainer/node_0.log", target_is_directory=False)
+        inference_log.symlink_to("inference/node_0.log", target_is_directory=False)
         return _preparation_token(config, cluster)
 
 
@@ -137,9 +127,7 @@ def run_node(config: RLConfig, cluster: AllocatedCluster) -> int:
                 "runtime_venv": shlex.quote(runtime_venv.as_posix()),
                 "config_dir": shlex.quote(config_dir.as_posix()),
                 "output_dir": shlex.quote(config.output_dir.as_posix()),
-                "orchestrator_output_dir": shlex.quote(
-                    config.orchestrator.output_dir.as_posix()
-                ),
+                "orchestrator_output_dir": shlex.quote(config.orchestrator.output_dir.as_posix()),
                 "node_addresses": shlex.quote(" ".join(cluster.addresses)),
                 "node_rank": cluster.rank,
                 "local_address": shlex.quote(cluster.local_address),
@@ -156,11 +144,7 @@ def run_node(config: RLConfig, cluster: AllocatedCluster) -> int:
         )
         script_path = run_root / "cluster_node.sh"
         script_path.parent.mkdir(parents=True, exist_ok=True)
-        script_path.write_text(
-            environment.get_template("allocated_cluster_node.sh.j2").render(
-                **context
-            )
-        )
+        script_path.write_text(environment.get_template("allocated_cluster_node.sh.j2").render(**context))
         if config.dry_run:
             return 0
 
@@ -192,8 +176,7 @@ def _validate_config(config: RLConfig, cluster: AllocatedCluster) -> None:
     expected_nodes = config.deployment.num_train_nodes + config.deployment.total_infer_nodes
     if expected_nodes != cluster.node_count:
         raise ValueError(
-            f"PrimeRL deployment requires {expected_nodes} nodes, but allocator supplied "
-            f"{cluster.node_count}."
+            f"PrimeRL deployment requires {expected_nodes} nodes, but allocator supplied {cluster.node_count}."
         )
 
 
@@ -205,13 +188,10 @@ def _require_preparation_token(
     actual = os.environ.get("PRIME_RL_PREPARATION_TOKEN")
     if actual is None:
         raise RuntimeError(
-            "Allocated-cluster preparation token is missing; run prepare and "
-            "forward its token to every worker."
+            "Allocated-cluster preparation token is missing; run prepare and forward its token to every worker."
         )
     if actual != expected:
-        raise RuntimeError(
-            "Allocated-cluster configuration or topology changed after preparation."
-        )
+        raise RuntimeError("Allocated-cluster configuration or topology changed after preparation.")
 
 
 def _preparation_token(
@@ -244,9 +224,7 @@ def _project_dir() -> Path:
     if not path.is_absolute():
         raise ValueError("PRIME_RL_PROJECT_DIR must be absolute.")
     if not (path / "pyproject.toml").is_file():
-        raise ValueError(
-            f"PRIME_RL_PROJECT_DIR is not a PrimeRL checkout: {path}"
-        )
+        raise ValueError(f"PRIME_RL_PROJECT_DIR is not a PrimeRL checkout: {path}")
     return path.resolve()
 
 
