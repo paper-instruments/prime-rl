@@ -129,6 +129,9 @@ def test_prepare_is_idempotent_for_log_links(tmp_path, monkeypatch):
 
     assert (config.output_dir / "logs" / "trainer.log").readlink() == Path("trainer/node_0.log")
     assert (config.output_dir / "logs" / "inference.log").readlink() == Path("inference/node_0.log")
+    assert (config.output_dir / "configs" / "trainer.toml").is_file()
+    assert (config.output_dir / "configs" / "orchestrator.toml").is_file()
+    assert (config.output_dir / "configs" / "inference.toml").is_file()
 
 
 def test_prepare_rejects_nonzero_rank(tmp_path):
