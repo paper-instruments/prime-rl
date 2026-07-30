@@ -15,6 +15,7 @@ rank_log() {
 # launch_inference_rank <port> <cuda_visible_devices> <dp> <rpc_port> <vllm_extra_json|""> <nixl_side_channel_port|""> <log_file>
 launch_inference_rank() {
     local port="$1" gpus="$2" dp="$3" rpc="$4" extra="$5" nixl="$6" log="$7"
+    LAUNCHED_SERVICE_PIDS=()
     # Per-rank dir for the mooncake-store lookup ipc socket. It must be unique per process:
     # external-LB runs one engine per process, all with data_parallel_rank_local 0, so the
     # lookup socket name collides on bind if the dir is shared node-wide. $port is unique per
@@ -27,8 +28,13 @@ launch_inference_rank() {
     [ -n "$rpc" ] && cmd+=(--data-parallel-rpc-port "$rpc")
     [ -n "$extra" ] && cmd+=(--vllm-extra "$extra")
     if [ -n "$nixl" ]; then
-        CUDA_VISIBLE_DEVICES="$gpus" VLLM_NIXL_SIDE_CHANNEL_PORT="$nixl" VLLM_RPC_BASE_PATH="$rpcbase" "${cmd[@]}" 2>&1 | tee -a "$log" &
+        (
+            CUDA_VISIBLE_DEVICES="$gpus" VLLM_NIXL_SIDE_CHANNEL_PORT="$nixl" VLLM_RPC_BASE_PATH="$rpcbase" "${cmd[@]}" 2>&1 | tee -a "$log"
+        ) &
     else
-        CUDA_VISIBLE_DEVICES="$gpus" VLLM_RPC_BASE_PATH="$rpcbase" "${cmd[@]}" 2>&1 | tee -a "$log" &
+        (
+            CUDA_VISIBLE_DEVICES="$gpus" VLLM_RPC_BASE_PATH="$rpcbase" "${cmd[@]}" 2>&1 | tee -a "$log"
+        ) &
     fi
+    LAUNCHED_SERVICE_PIDS+=( "$!" )
 }

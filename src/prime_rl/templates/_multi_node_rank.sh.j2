@@ -68,7 +68,9 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
     ulimit -l unlimited
 {%- endif %}
 {%- if kv_offload_mooncake %}
+    LAUNCHED_SERVICE_PIDS=()
 {% include "_mooncake_store.sh.j2" %}
+    SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )
 {%- endif %}
 
     REPLICA_IDX=$((INFER_NODE_RANK / NODES_PER_INFER_REPLICA))
@@ -135,6 +137,7 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
 
     if [ "$INFER_NODE_RANK" -eq 0 ]; then
         launch_router pd "$ROUTER_ARGS" "$ROUTER_PORT" "{{ router.policy }}" "$OUTPUT_DIR/logs/inference/router.log"
+        SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )
     fi
 {%- if router.type == "llm-d" %}
     if [ "$ROLE" = "decode" ]; then
@@ -150,6 +153,7 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
             --inference-pool prime-rl \
             --data-parallel-size "$INFERENCE_DP_LOCAL" \
             >> "$SIDECAR_LOG" 2>&1 &
+        SERVICE_PIDS+=( "$!" )
     fi
 {%- endif %}
 
@@ -159,10 +163,12 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
         RANK_GPUS=$(seq -s, $((k * INFERENCE_TP)) $((k * INFERENCE_TP + INFERENCE_TP - 1)))
         RANK_EXTRA="{\"data_parallel_address\": \"$DP_ADDR\", \"data_parallel_rank\": $GLOBAL_RANK, $ROLE_EXTRA}"
         launch_inference_rank "$((PORT + k))" "$RANK_GPUS" "$DP" "$INFERENCE_DATA_PARALLEL_RPC_PORT" "$RANK_EXTRA" "$((5600 + k))" "$(rank_log "$INFER_NODE_RANK" "$k")"
+        SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )
     done
 {%- else -%}
     if [ "$INFER_NODE_RANK" -eq 0 ]; then
         launch_router regular "$ROUTER_ARGS" "$ROUTER_PORT" "{{ router.policy }}" "$OUTPUT_DIR/logs/inference/router.log"
+        SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )
     fi
 
     REPLICA_HEAD_HOST="${HOSTNAMES[$((REPLICA_IDX * NODES_PER_INFER_REPLICA))]}"
@@ -178,12 +184,9 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
         else
             launch_inference_rank "$((BACKEND_PORT + d))" "$RANK_GPUS" 1 "" "" "" "$RANK_LOG"
         fi
+        SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )
     done
 {%- endif %}
-
-    while IFS= read -r pid; do
-        SERVICE_PIDS+=( "$pid" )
-    done < <(jobs -p)
 else
     TRAIN_NODE_RANK=$((PRIME_RL_NODE_RANK - NUM_INFER_NODES))
 {%- else %}
