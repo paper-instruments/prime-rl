@@ -279,9 +279,9 @@ PRIME_RL_LOCAL_ADDRESS
 PRIME_RL_CLUSTER_ID
 PRIME_RL_POOL_NAMESPACE
 PRIME_RL_PROJECT_DIR
-PRIME_RL_PREPARATION_TOKEN
 ```
 
+`prepare` emits `PRIME_RL_PREPARATION_TOKEN`; only `run` reads that token.
 The address list must be ordered by rank, unique, and identical on every node.
 `PRIME_RL_PROJECT_DIR` identifies the PrimeRL checkout. Set
 `UV_PROJECT_ENVIRONMENT` when its virtual environment lives outside that
