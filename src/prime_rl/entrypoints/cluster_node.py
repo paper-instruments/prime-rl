@@ -87,6 +87,7 @@ def prepare(config: RLConfig, cluster: AllocatedCluster) -> str:
         raise ValueError("Allocated-cluster preparation must run on rank 0.")
     with chdir(_project_dir()):
         prepare_rl_run(config)
+        write_subconfigs(config, config.output_dir / "configs")
         _ensure_run_directories(config)
         inference_logs = config.output_dir / "logs" / "inference"
         for log in inference_logs.glob("*.log"):
