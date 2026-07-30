@@ -21,6 +21,7 @@ def _config(
     slurm: dict | None = None,
     env_vars: dict[str, str] | None = None,
     orchestrator_on_inference: bool = False,
+    kv_offload: bool = False,
 ) -> RLConfig:
     data = {
         "trainer": {},
@@ -39,6 +40,11 @@ def _config(
         data["slurm"] = slurm
     if env_vars is not None:
         data["env_vars"] = env_vars
+    if kv_offload:
+        data["inference"]["kv_cache_offload"] = {
+            "type": "mooncake",
+            "cpu": {"num_bytes": 1024},
+        }
     return RLConfig.model_validate(data)
 
 
@@ -162,6 +168,8 @@ def test_external_node_renders_shared_placement_worker(tmp_path, monkeypatch):
     assert "WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$PRIME_RL_CLUSTER_ID}" in script
     assert "wait_for_prime_roles" in script
     assert "wait -n -p" not in script
+    assert "done < <(jobs -p)" not in script
+    assert 'SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )' in script
     assert "return 1" in script
     assert "SLURM_" not in script
     assert script.index("[ -f .env ] && source .env") < script.index("export PRIME_RL_NODE_RANK=0")
@@ -222,6 +230,19 @@ def test_external_service_only_worker_rejects_clean_exit(tmp_path, monkeypatch):
     result = cluster_node.run_node(config, _cluster())
 
     assert result == 1
+
+
+def test_external_service_failure_during_launch_is_not_lost(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-0").as_posix())
+    monkeypatch.setenv("MOCK_INFERENCE_STATUS", "7")
+    monkeypatch.setenv("MOCK_ROUTER_DELAY", "1")
+
+    result = cluster_node.run_node(config, _cluster())
+
+    assert result == 7
 
 
 def test_external_orchestrator_completion_ends_inference_worker(tmp_path, monkeypatch):
@@ -322,7 +343,7 @@ def test_external_dry_run_renders_without_execution(tmp_path, monkeypatch):
 
 
 def test_slurm_adapter_invokes_shared_worker(tmp_path):
-    config = _config(tmp_path, slurm={})
+    config = _config(tmp_path, slurm={}, kv_offload=True)
     config_dir = tmp_path / "configs"
     write_subconfigs(config, config_dir)
     script_path = tmp_path / "rl.sbatch"
@@ -334,6 +355,10 @@ def test_slurm_adapter_invokes_shared_worker(tmp_path):
     assert "export PRIME_RL_NODE_RANK=$SLURM_PROCID" in script
     assert '--node-rank="$TRAIN_NODE_RANK"' in script
     assert '--rdzv-id="job_$PRIME_RL_CLUSTER_ID"' in script
+    assert "mooncake_master " in script
+    assert "mooncake_client " in script
+    assert script.count('LAUNCHED_SERVICE_PIDS+=( "$!" )') >= 2
+    assert 'SERVICE_PIDS+=( "${LAUNCHED_SERVICE_PIDS[@]}" )' in script
     subprocess.run(["bash", "-n", script_path.as_posix()], check=True)
 
 
