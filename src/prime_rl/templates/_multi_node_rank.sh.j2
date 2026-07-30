@@ -1,6 +1,9 @@
 read -ra HOSTNAMES <<< "$HOSTNAMES_STR"
 TRAINER_PID=
 ORCHESTRATOR_PID=
+SERVICE_PIDS=()
+FINITE_ROLE_PIDS=()
+FINITE_ROLE_COUNT=0
 TRAIN_HOSTS=( "${HOSTNAMES[@]:$NUM_INFER_NODES}" )
 
 {% if num_infer_nodes > 0 -%}
@@ -57,7 +60,7 @@ echo "MASTER_PORT=${MASTER_PORT}"
 if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
     INFER_NODE_RANK=$PRIME_RL_NODE_RANK
 {%- for key, value in inference_env_vars.items() %}
-    export {{ key }}="{{ value }}"
+    export {{ key }}={{ value }}
 {%- endfor %}
     LOCAL_IP=$PRIME_RL_LOCAL_ADDRESS
 
@@ -72,7 +75,7 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
     RANK_IN_REPLICA=$((INFER_NODE_RANK % NODES_PER_INFER_REPLICA))
 
     echo "INFER_NODE_RANK=$INFER_NODE_RANK REPLICA=$REPLICA_IDX RANK_IN_REPLICA=$RANK_IN_REPLICA LOCAL_IP=$LOCAL_IP" \
-        | tee $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
+        | tee "$OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log"
 
     CONFIG_PATH="$CONFIG_DIR/inference.toml"
 {% include "_launch_rank.sh.j2" %}
@@ -108,7 +111,7 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
         START_RANK=$((ROLE_RANK * INFERENCE_DP_LOCAL))
         HEAD_HOST="${HOSTNAMES[$((REPLICA_BASE + SUB_REPLICA * NODES_PER_PREFILL_REPLICA))]}"
 {% for key, value in prefill_env_vars.items() %}
-        export {{ key }}="{{ value }}"
+        export {{ key }}={{ value }}
 {% endfor %}
         ROLE_EXTRA="\"all2all_backend\": \"deepep_high_throughput\"{{ prefill_vllm_extra_json }}"
     else
@@ -122,13 +125,13 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
         START_RANK=$((ROLE_RANK * INFERENCE_DP_LOCAL))
         HEAD_HOST="${HOSTNAMES[$((REPLICA_BASE + NUM_PREFILL_NODES + SUB_REPLICA * NODES_PER_DECODE_REPLICA))]}"
 {% for key, value in decode_env_vars.items() %}
-        export {{ key }}="{{ value }}"
+        export {{ key }}={{ value }}
 {% endfor %}
         ROLE_EXTRA="\"all2all_backend\": \"deepep_low_latency\", \"compilation_config\": $DECODE_COMPILE_CFG{{ decode_vllm_extra_json }}"
     fi
 
     echo "ROLE=$ROLE REPLICA=$REPLICA_IDX SUB_REPLICA=$SUB_REPLICA ROLE_RANK=$ROLE_RANK DP=$DP PORT=$PORT" \
-        | tee -a $OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log
+        | tee -a "$OUTPUT_DIR/logs/inference/node_${INFER_NODE_RANK}.log"
 
     if [ "$INFER_NODE_RANK" -eq 0 ]; then
         launch_router pd "$ROUTER_ARGS" "$ROUTER_PORT" "{{ router.policy }}" "$OUTPUT_DIR/logs/inference/router.log"
@@ -136,7 +139,7 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
 {%- if router.type == "llm-d" %}
     if [ "$ROLE" = "decode" ]; then
         SIDECAR_LOG="$OUTPUT_DIR/logs/inference/sidecar_${INFER_NODE_RANK}.log"
-        echo "Starting pd-sidecar on $LOCAL_IP:$DECODE_SIDECAR_PORT(+rank) -> vLLM $DECODE_PORT(+rank)" | tee $SIDECAR_LOG
+        echo "Starting pd-sidecar on $LOCAL_IP:$DECODE_SIDECAR_PORT(+rank) -> vLLM $DECODE_PORT(+rank)" | tee "$SIDECAR_LOG"
         export PATH="$PROJECT_DIR/third_party/llmd/bin:$PATH"
         pd-sidecar \
             --port $DECODE_SIDECAR_PORT \
@@ -145,8 +148,8 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
             --secure-proxy=false \
             --enable-ssrf-protection=false \
             --inference-pool prime-rl \
-            --data-parallel-size $INFERENCE_DP_LOCAL \
-            >> $SIDECAR_LOG 2>&1 &
+            --data-parallel-size "$INFERENCE_DP_LOCAL" \
+            >> "$SIDECAR_LOG" 2>&1 &
     fi
 {%- endif %}
 
@@ -178,6 +181,9 @@ if [ "$PRIME_RL_NODE_RANK" -lt "$NUM_INFER_NODES" ]; then
     done
 {%- endif %}
 
+    while IFS= read -r pid; do
+        SERVICE_PIDS+=( "$pid" )
+    done < <(jobs -p)
 else
     TRAIN_NODE_RANK=$((PRIME_RL_NODE_RANK - NUM_INFER_NODES))
 {%- else %}
@@ -185,62 +191,109 @@ else
 {%- endif %}
 
 {%- for key, value in trainer_env_vars.items() %}
-    export {{ key }}="{{ value }}"
+    export {{ key }}={{ value }}
 {%- endfor %}
 
-    echo "$HOSTNAMES_STR" | tee $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log
+    echo "$HOSTNAMES_STR" | tee "$OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log"
 
     WANDB_SHARED_LABEL=trainer uv run torchrun \
         --role=trainer \
-        --nnodes=$NUM_TRAIN_NODES \
-        --nproc-per-node=$GPUS_PER_NODE \
-        --node-rank=$TRAIN_NODE_RANK \
-        --rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT \
-        --rdzv-id=job_$PRIME_RL_CLUSTER_ID \
-        --log-dir=$OUTPUT_DIR/logs/trainer/torchrun \
+        --nnodes="$NUM_TRAIN_NODES" \
+        --nproc-per-node="$GPUS_PER_NODE" \
+        --node-rank="$TRAIN_NODE_RANK" \
+        --rdzv-endpoint="$MASTER_ADDR:$MASTER_PORT" \
+        --rdzv-id="job_$PRIME_RL_CLUSTER_ID" \
+        --log-dir="$OUTPUT_DIR/logs/trainer/torchrun" \
         --tee=3 \
         --redirects=3 \
         --local-ranks-filter={{ ranks_filter }} \
         -m prime_rl.trainer.rl.train \
-        @ $CONFIG_DIR/trainer.toml \
-        {% if use_zmq_transport %}--rollout_transport.host $MASTER_ADDR \
-        {% endif %}2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log &
+        @ "$CONFIG_DIR/trainer.toml" \
+        {% if use_zmq_transport %}--rollout_transport.host "$MASTER_ADDR" \
+        {% endif %}2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a "$OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log" &
     TRAINER_PID=$!
+    FINITE_ROLE_PIDS+=( "$TRAINER_PID" )
+    FINITE_ROLE_COUNT=$((FINITE_ROLE_COUNT + 1))
 {% if num_infer_nodes > 0 %}    fi{% endif %}
 {% if num_infer_nodes > 0 %}
 {% if orchestrator_on_inference %}ORCH_PROCID=$((NUM_INFER_NODES - 1)){% else %}ORCH_PROCID=$NUM_INFER_NODES{% endif %}
 if [ "$PRIME_RL_NODE_RANK" -eq "$ORCH_PROCID" ]; then
-    ORCHESTRATOR_ARGS="@ $CONFIG_DIR/orchestrator.toml"
-    ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --model.client.base-url $INFER_URLS"
-    ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --model.client.admin-base-url $ADMIN_URLS"
+    read -ra ADMIN_URL_ARRAY <<< "$ADMIN_URLS"
+    ORCHESTRATOR_ARGS=(
+        @ "$CONFIG_DIR/orchestrator.toml"
+        --model.client.base-url "$INFER_URLS"
+        --model.client.admin-base-url "${ADMIN_URL_ARRAY[@]}"
+    )
 {%- if orchestrator_env_vars %}
 {%- for key, value in orchestrator_env_vars.items() %}
-    export {{ key }}="{{ value }}"
+    export {{ key }}={{ value }}
 {%- endfor %}
 {%- endif %}
-    {% if use_nccl_broadcast %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --weight_broadcast.host $MASTER_ADDR"
-    {% endif %}{% if use_zmq_transport %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --rollout_transport.host $MASTER_ADDR"
-    {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator $ORCHESTRATOR_ARGS \
-        2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log &
+    {% if use_nccl_broadcast %}ORCHESTRATOR_ARGS+=(--weight_broadcast.host "$MASTER_ADDR")
+    {% endif %}{% if use_zmq_transport %}ORCHESTRATOR_ARGS+=(--rollout_transport.host "$MASTER_ADDR")
+    {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator "${ORCHESTRATOR_ARGS[@]}" \
+        2>&1 | tee "$OUTPUT_DIR/logs/orchestrator.log" &
     ORCHESTRATOR_PID=$!
+    FINITE_ROLE_PIDS+=( "$ORCHESTRATOR_PID" )
+    FINITE_ROLE_COUNT=$((FINITE_ROLE_COUNT + 1))
 fi
 {% endif %}
 
-if [ -n "$TRAINER_PID" ] && [ -n "$ORCHESTRATOR_PID" ]; then
-    wait -n -p EXITED_PID "$TRAINER_PID" "$ORCHESTRATOR_PID"
-    EXIT_CODE=$?
-    if [ "$EXIT_CODE" -eq 0 ]; then
-        if [ "$EXITED_PID" = "$TRAINER_PID" ]; then
-            wait "$ORCHESTRATOR_PID"
-        else
-            wait "$TRAINER_PID"
-        fi
-        EXIT_CODE=$?
+pid_is_running() {
+    kill -0 "$1" 2>/dev/null
+}
+
+wait_for_prime_roles() {
+    local pid status index clean_service_exit
+
+    if [ -z "${SERVICE_PIDS[*]}" ] && [ "$FINITE_ROLE_COUNT" -eq 0 ]; then
+        echo "[$(hostname)] no PrimeRL roles were launched"
+        return 1
     fi
-else
-    wait -n
-    EXIT_CODE=$?
-fi
+
+    while true; do
+        clean_service_exit=
+        for pid in "${SERVICE_PIDS[@]}"; do
+            if ! pid_is_running "$pid"; then
+                wait "$pid"
+                status=$?
+                if [ "$status" -ne 0 ]; then
+                    echo "[$(hostname)] long-running service $pid exited before PrimeRL completed (status $status)"
+                    return "$status"
+                fi
+                clean_service_exit=$pid
+            fi
+        done
+
+        for index in "${!FINITE_ROLE_PIDS[@]}"; do
+            pid=${FINITE_ROLE_PIDS[$index]}
+            if ! pid_is_running "$pid"; then
+                wait "$pid"
+                status=$?
+                unset "FINITE_ROLE_PIDS[$index]"
+                FINITE_ROLE_COUNT=$((FINITE_ROLE_COUNT - 1))
+                if [ "$status" -ne 0 ]; then
+                    echo "[$(hostname)] finite PrimeRL role $pid exited with status $status"
+                    return "$status"
+                fi
+            fi
+        done
+
+        if [ "$FINITE_ROLE_COUNT" -eq 0 ] && { [ -n "$TRAINER_PID" ] || [ -n "$ORCHESTRATOR_PID" ]; }; then
+            return 0
+        fi
+
+        if [ -n "$clean_service_exit" ]; then
+            echo "[$(hostname)] long-running service $clean_service_exit exited before PrimeRL completed (status 1)"
+            return 1
+        fi
+
+        sleep 0.1
+    done
+}
+
+wait_for_prime_roles
+EXIT_CODE=$?
 REMAINING_PIDS=$(jobs -p)
 {%- if cleanup_grace_period %}
 if [ "$EXIT_CODE" -ne 0 ]; then
@@ -250,6 +303,6 @@ fi
 {%- endif %}
 echo "[$(hostname)] tearing down (exit code $EXIT_CODE) - terminating remaining processes"
 for pid in $REMAINING_PIDS; do
-    kill -TERM $pid 2>/dev/null || true
+    kill -TERM "$pid" 2>/dev/null || true
 done
 exit $EXIT_CODE

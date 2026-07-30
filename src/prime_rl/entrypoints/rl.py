@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -42,6 +43,7 @@ RL_SBATCH = "rl.sbatch"
 TRAINER_TOML = "trainer.toml"
 ORCHESTRATOR_TOML = "orchestrator.toml"
 INFERENCE_TOML = "inference.toml"
+_ENV_VAR_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def get_physical_gpu_ids() -> list[int]:
@@ -380,21 +382,6 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
         kv_offload_device_name=offload.device_name if is_mooncake else "",
     )
 
-    # Per-component env vars: launcher defaults (shared + multi-node-specific) with the
-    # user's config merged on top. Runtime wiring stays in the template.
-    trainer_env_vars = {
-        **DEFAULT_COMMON_ENV_VARS,
-        **DEFAULT_TRAINER_ENV_VARS,
-        **config.env_vars,
-        **config.trainer.env_vars,
-    }
-    orchestrator_env_vars = {**DEFAULT_COMMON_ENV_VARS, **config.env_vars, **config.orchestrator.env_vars}
-    inference_env_vars = (
-        {**DEFAULT_COMMON_ENV_VARS, **DEFAULT_INFERENCE_ENV_VARS, **config.env_vars, **config.inference.env_vars}
-        if config.inference
-        else {}
-    )
-
     if config.deployment.type == "single_node":
         script = template.render(
             **config.slurm.template_vars,
@@ -404,6 +391,7 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
         )
     elif config.inference is not None and config.inference.deployment.type == "disaggregated":
         infer_deploy = config.inference.deployment
+        trainer_env_vars, orchestrator_env_vars, inference_env_vars = _component_env_vars(config)
 
         script = template.render(
             **config.slurm.template_vars,
@@ -429,8 +417,8 @@ def write_slurm_script(config: RLConfig, config_dir: Path, script_path: Path) ->
             inference_tp=config.inference.parallel.tp,
             inference_data_parallel_rpc_port=config.inference.data_parallel_rpc_port,
             use_deep_gemm=config.inference.use_deep_gemm,
-            prefill_env_vars=infer_deploy.prefill_env_vars,
-            decode_env_vars=infer_deploy.decode_env_vars,
+            prefill_env_vars=_shell_env_vars(infer_deploy.prefill_env_vars),
+            decode_env_vars=_shell_env_vars(infer_deploy.decode_env_vars),
             trainer_env_vars=trainer_env_vars,
             orchestrator_env_vars=orchestrator_env_vars,
             inference_env_vars=inference_env_vars,
@@ -458,18 +446,7 @@ def regular_multi_node_template_context(config: RLConfig, config_dir: Path) -> d
     assert config.deployment.type == "multi_node"
     assert config.inference is None or config.inference.deployment.type != "disaggregated"
 
-    trainer_env_vars = {
-        **DEFAULT_COMMON_ENV_VARS,
-        **DEFAULT_TRAINER_ENV_VARS,
-        **config.env_vars,
-        **config.trainer.env_vars,
-    }
-    orchestrator_env_vars = {**DEFAULT_COMMON_ENV_VARS, **config.env_vars, **config.orchestrator.env_vars}
-    inference_env_vars = (
-        {**DEFAULT_COMMON_ENV_VARS, **DEFAULT_INFERENCE_ENV_VARS, **config.env_vars, **config.inference.env_vars}
-        if config.inference
-        else {}
-    )
+    trainer_env_vars, orchestrator_env_vars, inference_env_vars = _component_env_vars(config)
     offload = config.inference.kv_cache_offload if config.inference is not None else None
     is_mooncake = offload is not None and offload.type == "mooncake"
 
@@ -599,6 +576,42 @@ def prepare_rl_run(config: RLConfig) -> None:
         from prime_rl.trainer.model import pre_download_model
 
         pre_download_model(config.trainer.model.name)
+
+
+def _component_env_vars(config: RLConfig) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
+    trainer = {
+        **DEFAULT_COMMON_ENV_VARS,
+        **DEFAULT_TRAINER_ENV_VARS,
+        **config.env_vars,
+        **config.trainer.env_vars,
+    }
+    orchestrator = {
+        **DEFAULT_COMMON_ENV_VARS,
+        **config.env_vars,
+        **config.orchestrator.env_vars,
+    }
+    inference = (
+        {
+            **DEFAULT_COMMON_ENV_VARS,
+            **DEFAULT_INFERENCE_ENV_VARS,
+            **config.env_vars,
+            **config.inference.env_vars,
+        }
+        if config.inference
+        else {}
+    )
+    return _shell_env_vars(trainer), _shell_env_vars(orchestrator), _shell_env_vars(inference)
+
+
+def _shell_env_vars(env_vars: dict[str, str]) -> dict[str, str]:
+    invalid_names = sorted(name for name in env_vars if not _ENV_VAR_NAME_PATTERN.fullmatch(name))
+    if invalid_names:
+        raise ValueError(f"Invalid shell environment variable names: {invalid_names}")
+    quoted = {}
+    for name, value in env_vars.items():
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"').replace("$", "\\$").replace("`", "\\`")
+        quoted[name] = f'"{escaped}"'
+    return quoted
 
 
 def rl(config: RLConfig):

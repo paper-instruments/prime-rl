@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -19,6 +20,7 @@ def _config(
     *,
     slurm: dict | None = None,
     env_vars: dict[str, str] | None = None,
+    orchestrator_on_inference: bool = False,
 ) -> RLConfig:
     data = {
         "trainer": {},
@@ -29,6 +31,7 @@ def _config(
             "gpus_per_node": 8,
             "num_train_nodes": 1,
             "num_infer_nodes": 1,
+            "orchestrator_on_inference": orchestrator_on_inference,
         },
         "output_dir": tmp_path / "output",
     }
@@ -154,12 +157,12 @@ def test_external_node_renders_shared_placement_worker(tmp_path, monkeypatch):
 
     script = (tmp_path / "rank-0" / "cluster_node.sh").read_text()
     assert "HOSTNAMES_STR='10.0.0.1 10.0.0.2'" in script
-    assert "--rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT" in script
-    assert "--rdzv-id=job_$PRIME_RL_CLUSTER_ID" in script
+    assert '--rdzv-endpoint="$MASTER_ADDR:$MASTER_PORT"' in script
+    assert '--rdzv-id="job_$PRIME_RL_CLUSTER_ID"' in script
     assert "WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$PRIME_RL_CLUSTER_ID}" in script
-    assert 'wait -n -p EXITED_PID "$TRAINER_PID" "$ORCHESTRATOR_PID"' in script
-    assert 'wait "$ORCHESTRATOR_PID"' in script
-    assert 'wait "$TRAINER_PID"' in script
+    assert "wait_for_prime_roles" in script
+    assert "wait -n -p" not in script
+    assert "return 1" in script
     assert "SLURM_" not in script
     assert script.index("[ -f .env ] && source .env") < script.index("export PRIME_RL_NODE_RANK=0")
     assert script.index("[ -f .env ] && source .env") < script.index("export UV_PROJECT_ENVIRONMENT=")
@@ -167,6 +170,123 @@ def test_external_node_renders_shared_placement_worker(tmp_path, monkeypatch):
         ["bash", "-n", (tmp_path / "rank-0" / "cluster_node.sh").as_posix()],
         check=True,
     )
+
+
+def test_external_worker_waits_for_all_finite_roles(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-1").as_posix())
+    trainer_marker = tmp_path / "trainer-finished"
+    orchestrator_marker = tmp_path / "orchestrator-finished"
+    monkeypatch.setenv("MOCK_TRAINER_DELAY", "0.01")
+    monkeypatch.setenv("MOCK_TRAINER_MARKER", trainer_marker.as_posix())
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_DELAY", "0.15")
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_MARKER", orchestrator_marker.as_posix())
+
+    result = cluster_node.run_node(
+        config,
+        _cluster(rank=1, local_address="10.0.0.2"),
+    )
+
+    assert result == 0
+    assert trainer_marker.is_file()
+    assert orchestrator_marker.is_file()
+
+
+def test_external_worker_propagates_finite_role_failure(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-1").as_posix())
+    monkeypatch.setenv("MOCK_TRAINER_DELAY", "0.01")
+    monkeypatch.setenv("MOCK_TRAINER_STATUS", "7")
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_DELAY", "0.2")
+
+    result = cluster_node.run_node(
+        config,
+        _cluster(rank=1, local_address="10.0.0.2"),
+    )
+
+    assert result == 7
+
+
+def test_external_service_only_worker_rejects_clean_exit(tmp_path, monkeypatch):
+    config = _config(tmp_path)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-0").as_posix())
+    monkeypatch.setenv("MOCK_INFERENCE_DELAY", "0.01")
+    monkeypatch.setenv("MOCK_ROUTER_DELAY", "1")
+
+    result = cluster_node.run_node(config, _cluster())
+
+    assert result == 1
+
+
+def test_external_orchestrator_completion_ends_inference_worker(tmp_path, monkeypatch):
+    config = _config(tmp_path, orchestrator_on_inference=True)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-0").as_posix())
+    monkeypatch.setenv("MOCK_INFERENCE_DELAY", "1")
+    monkeypatch.setenv("MOCK_ROUTER_DELAY", "1")
+    orchestrator_marker = tmp_path / "orchestrator-finished"
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_DELAY", "0.01")
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_MARKER", orchestrator_marker.as_posix())
+
+    result = cluster_node.run_node(config, _cluster())
+
+    assert result == 0
+    assert orchestrator_marker.is_file()
+
+
+def test_external_orchestrator_success_wins_over_clean_service_exit(
+    tmp_path,
+    monkeypatch,
+):
+    config = _config(tmp_path, orchestrator_on_inference=True)
+    _prepare_external_run(tmp_path, monkeypatch, config)
+    _install_mock_commands(tmp_path, monkeypatch)
+    monkeypatch.setenv("PRIME_RL_LOCAL_RUN_DIR", (tmp_path / "rank-0").as_posix())
+    completion_marker = tmp_path / "orchestrator-finished"
+    monkeypatch.setenv("MOCK_ORCHESTRATOR_MARKER", completion_marker.as_posix())
+    monkeypatch.setenv(
+        "MOCK_INFERENCE_WAIT_FOR_MARKER",
+        completion_marker.as_posix(),
+    )
+    monkeypatch.setenv(
+        "MOCK_ROUTER_WAIT_FOR_MARKER",
+        completion_marker.as_posix(),
+    )
+
+    result = cluster_node.run_node(config, _cluster())
+
+    assert result == 0
+
+
+def test_external_worker_preserves_shell_sensitive_values(tmp_path, monkeypatch):
+    runtime_root = tmp_path / "allocator root with spaces"
+    runtime_root.mkdir()
+    literal = 'value with spaces $HOME "quoted" $(false)'
+    config = _config(runtime_root, env_vars={"SHELL_LITERAL": literal})
+    _prepare_external_run(runtime_root, monkeypatch, config)
+    _install_mock_commands(runtime_root, monkeypatch)
+    monkeypatch.setenv(
+        "PRIME_RL_LOCAL_RUN_DIR",
+        (runtime_root / "rank 1 local state").as_posix(),
+    )
+    env_marker = runtime_root / "literal value"
+    monkeypatch.setenv("MOCK_ENV_MARKER", env_marker.as_posix())
+
+    result = cluster_node.run_node(
+        config,
+        _cluster(rank=1, local_address="10.0.0.2"),
+    )
+
+    assert result == 0
+    assert env_marker.read_text() == literal
+    assert (config.output_dir / "logs" / "trainer" / "node_0.log").is_file()
 
 
 def test_external_node_requires_matching_preparation(tmp_path, monkeypatch):
@@ -212,8 +332,8 @@ def test_slurm_adapter_invokes_shared_worker(tmp_path):
     script = script_path.read_text()
     assert "srun --kill-on-bad-exit=1" in script
     assert "export PRIME_RL_NODE_RANK=$SLURM_PROCID" in script
-    assert "--node-rank=$TRAIN_NODE_RANK" in script
-    assert "--rdzv-id=job_$PRIME_RL_CLUSTER_ID" in script
+    assert '--node-rank="$TRAIN_NODE_RANK"' in script
+    assert '--rdzv-id="job_$PRIME_RL_CLUSTER_ID"' in script
     subprocess.run(["bash", "-n", script_path.as_posix()], check=True)
 
 
@@ -232,7 +352,7 @@ def test_custom_slurm_template_can_include_shared_worker(tmp_path):
 
     script = script_path.read_text()
     assert "infer_nodes_per_replica=1" in script
-    assert "--node-rank=$TRAIN_NODE_RANK" in script
+    assert '--node-rank="$TRAIN_NODE_RANK"' in script
 
 
 def test_disaggregated_slurm_still_renders_shared_worker(tmp_path):
@@ -354,3 +474,60 @@ def _configure_external_runtime(tmp_path, monkeypatch) -> None:
     (venv_dir / "bin/activate").touch()
     monkeypatch.setenv("PRIME_RL_PROJECT_DIR", project_dir.as_posix())
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", venv_dir.as_posix())
+
+
+def _install_mock_commands(tmp_path: Path, monkeypatch) -> None:
+    mock_bin = tmp_path / "mock-bin"
+    mock_bin.mkdir()
+    uv = mock_bin / "uv"
+    uv.write_text(
+        """#!/bin/bash
+case "${2:-}" in
+    torchrun)
+        delay=${MOCK_TRAINER_DELAY:-0}
+        status=${MOCK_TRAINER_STATUS:-0}
+        marker=${MOCK_TRAINER_MARKER:-}
+        wait_marker=${MOCK_TRAINER_WAIT_FOR_MARKER:-}
+        ;;
+    orchestrator)
+        delay=${MOCK_ORCHESTRATOR_DELAY:-0}
+        status=${MOCK_ORCHESTRATOR_STATUS:-0}
+        marker=${MOCK_ORCHESTRATOR_MARKER:-}
+        wait_marker=${MOCK_ORCHESTRATOR_WAIT_FOR_MARKER:-}
+        ;;
+    inference)
+        delay=${MOCK_INFERENCE_DELAY:-0}
+        status=${MOCK_INFERENCE_STATUS:-0}
+        marker=${MOCK_INFERENCE_MARKER:-}
+        wait_marker=${MOCK_INFERENCE_WAIT_FOR_MARKER:-}
+        ;;
+    *)
+        exit 64
+        ;;
+esac
+while [ -n "$wait_marker" ] && [ ! -f "$wait_marker" ]; do
+    sleep 0.001
+done
+sleep "$delay"
+if [ -n "$marker" ]; then
+    printf done > "$marker"
+fi
+if [ -n "${MOCK_ENV_MARKER:-}" ]; then
+    printf %s "${SHELL_LITERAL:-}" > "$MOCK_ENV_MARKER"
+fi
+exit "$status"
+"""
+    )
+    uv.chmod(0o755)
+    router = mock_bin / "vllm-router"
+    router.write_text(
+        """#!/bin/bash
+while [ -n "${MOCK_ROUTER_WAIT_FOR_MARKER:-}" ] && [ ! -f "$MOCK_ROUTER_WAIT_FOR_MARKER" ]; do
+    sleep 0.001
+done
+sleep "${MOCK_ROUTER_DELAY:-0}"
+exit "${MOCK_ROUTER_STATUS:-0}"
+"""
+    )
+    router.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{mock_bin}:{os.environ['PATH']}")
