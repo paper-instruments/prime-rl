@@ -171,6 +171,9 @@ srun --kill-on-bad-exit=1 bash -c '
 
     INFER_NODE_RANK=$SLURM_PROCID
     LOCAL_IP=$(hostname -I | awk "{print \$1}")
+    export PRIME_RL_CLUSTER_ID=$SLURM_JOB_ID
+    export PRIME_RL_POOL_NAMESPACE=slurm
+    read -ra HOSTNAMES <<< "$HOSTNAMES_STR"
     # Inference env vars: launcher defaults + [inference.env_vars]
 {%- for key, value in inference_env_vars.items() %}
     export {{ key }}="{{ value }}"
@@ -192,8 +195,6 @@ srun --kill-on-bad-exit=1 bash -c '
         ln -sfn "$OUTPUT_DIR/nvshmem/lib" /tmp/deepep_build/nvshmem/lib
     fi
 
-    # Reconstruct hostnames array
-    read -ra HOSTNAMES <<< "$HOSTNAMES_STR"
     # Bind gloo to the interface that owns LOCAL_IP (the rendezvous IP) — NIC
     # names vary across clusters (bond0, eth0, ...). If the lookup fails, leave
     # GLOO_SOCKET_IFNAME unset so gloo falls back to its own detection.

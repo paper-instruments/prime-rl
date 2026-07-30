@@ -22,11 +22,12 @@ This page covers how to scale `prime-rl` from a single GPU to a 1000-GPU cluster
   - [`[deployment]` Block](#deployment-block)
   - [Examples](#examples)
   - [Custom Templates](#custom-templates)
+- [Externally Allocated RL Clusters](#externally-allocated-rl-clusters)
 - [Benchmarking](#benchmarking)
 
 ## Single-Node vs. Multi-Node Deployment
 
-The `rl`, `sft`, and `inference` entrypoints all accept a `[deployment]` block (`type = "single_node"` or `"multi_node"`) that picks how the trainer / orchestrator / inference processes are placed across hardware. **Single-node** runs locally; **multi-node** currently goes through [SLURM](#slurm) — the launcher writes an sbatch script that places inference replicas, the orchestrator, and the trainer with the right rendezvous endpoints, IPs, ports, and shared-filesystem paths wired in.
+The `rl`, `sft`, and `inference` entrypoints all accept a `[deployment]` block (`type = "single_node"` or `"multi_node"`) that picks how the trainer / orchestrator / inference processes are placed across hardware. **Single-node** runs locally. The standard multi-node launch path uses [SLURM](#slurm); an allocator integration can instead invoke the [externally allocated RL entrypoint](#externally-allocated-rl-clusters) once per node.
 
 ### Single-Node
 
@@ -73,7 +74,7 @@ uv run torchrun \
 
 ### Multi-Node
 
-Multi-node deployments (RL or SFT) are launched via [SLURM](#slurm) — set `[deployment] type = "multi_node"` plus the matching `[slurm]` block, and the launcher writes the sbatch script that places inference, orchestrator, and trainer across the requested nodes with the inter-process wiring set up correctly. See [SLURM § Examples](#examples) for full configs.
+Multi-node deployments use the same PrimeRL role placement under either [SLURM](#slurm) or an [external allocator](#externally-allocated-rl-clusters). The built-in `rl` command requires `[slurm]` for multi-node runs; external allocators prepare the shared run once and invoke PrimeRL's per-node entrypoint with explicit ordered topology.
 
 ## Parallelism Knobs
 
@@ -242,6 +243,59 @@ uv run rl @ my_config.toml --slurm.template-path path/to/my_template.sbatch.j2
 ```
 
 The default templates live under [`src/prime_rl/templates/`](https://github.com/PrimeIntellect-ai/prime-rl/tree/main/src/prime_rl/templates) — copy one as a starting point.
+
+## Externally Allocated RL Clusters
+
+Schedulers and cloud allocators that already own a gang allocation can invoke
+PrimeRL's placement worker without emulating Slurm. The allocator must provide
+one process per node, a rank-ordered address list, a stable cluster ID, and
+cross-node failure propagation.
+
+Run shared preparation exactly once:
+
+```bash
+uv run python -m prime_rl.entrypoints.cluster_node prepare @ rl.toml
+```
+
+The prepare command emits a `PRIME_RL_PREPARATION_TOKEN`. The allocator must
+forward that exact token to every worker after preparation succeeds. Workers
+reject a token if the resolved configuration, ordered topology, or cluster ID
+differs from preparation. Consistent PrimeRL software remains the allocator's
+deployment responsibility.
+
+Then run one worker on every allocated node:
+
+```bash
+uv run python -m prime_rl.entrypoints.cluster_node run @ rl.toml
+```
+
+Both commands read:
+
+```text
+PRIME_RL_NODE_RANK
+PRIME_RL_NODE_COUNT
+PRIME_RL_NODE_ADDRESSES_JSON
+PRIME_RL_LOCAL_ADDRESS
+PRIME_RL_CLUSTER_ID
+PRIME_RL_POOL_NAMESPACE
+PRIME_RL_PROJECT_DIR
+```
+
+`prepare` emits `PRIME_RL_PREPARATION_TOKEN`; only `run` reads that token.
+The address list must be ordered by rank, unique, and identical on every node.
+`PRIME_RL_PROJECT_DIR` identifies the PrimeRL checkout. Set
+`UV_PROJECT_ENVIRONMENT` when its virtual environment lives outside that
+checkout.
+The allocator remains responsible for synchronizing preparation, terminating
+the complete worker process group when one rank fails, and preserving shared
+output. PrimeRL writes
+rank-local resolved configs under
+`/tmp/prime-rl/<cluster-id>/rank-<rank>/` unless
+`PRIME_RL_LOCAL_RUN_DIR` is set.
+
+The allocated entrypoint supports PrimeRL's regular multi-node placement.
+Slurm remains the supported path for disaggregated inference and Mooncake
+offload.
 
 ## Benchmarking
 
