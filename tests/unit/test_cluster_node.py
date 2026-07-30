@@ -157,6 +157,9 @@ def test_external_node_renders_shared_placement_worker(tmp_path, monkeypatch):
     assert "--rdzv-endpoint=$MASTER_ADDR:$MASTER_PORT" in script
     assert "--rdzv-id=job_$PRIME_RL_CLUSTER_ID" in script
     assert "WANDB_SHARED_RUN_ID=${WANDB_SHARED_RUN_ID:-$PRIME_RL_CLUSTER_ID}" in script
+    assert 'wait -n -p EXITED_PID "$TRAINER_PID" "$ORCHESTRATOR_PID"' in script
+    assert 'wait "$ORCHESTRATOR_PID"' in script
+    assert 'wait "$TRAINER_PID"' in script
     assert "SLURM_" not in script
     assert script.index("[ -f .env ] && source .env") < script.index("export PRIME_RL_NODE_RANK=0")
     assert script.index("[ -f .env ] && source .env") < script.index("export UV_PROJECT_ENVIRONMENT=")

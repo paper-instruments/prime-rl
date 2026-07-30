@@ -1,4 +1,6 @@
 read -ra HOSTNAMES <<< "$HOSTNAMES_STR"
+TRAINER_PID=
+ORCHESTRATOR_PID=
 TRAIN_HOSTS=( "${HOSTNAMES[@]:$NUM_INFER_NODES}" )
 
 {% if num_infer_nodes > 0 -%}
@@ -203,6 +205,7 @@ else
         @ $CONFIG_DIR/trainer.toml \
         {% if use_zmq_transport %}--rollout_transport.host $MASTER_ADDR \
         {% endif %}2>&1 | sed -u 's/^\[[a-zA-Z]*[0-9]*\]://' | tee -a $OUTPUT_DIR/logs/trainer/node_${TRAIN_NODE_RANK}.log &
+    TRAINER_PID=$!
 {% if num_infer_nodes > 0 %}    fi{% endif %}
 {% if num_infer_nodes > 0 %}
 {% if orchestrator_on_inference %}ORCH_PROCID=$((NUM_INFER_NODES - 1)){% else %}ORCH_PROCID=$NUM_INFER_NODES{% endif %}
@@ -219,11 +222,25 @@ if [ "$PRIME_RL_NODE_RANK" -eq "$ORCH_PROCID" ]; then
     {% endif %}{% if use_zmq_transport %}ORCHESTRATOR_ARGS="$ORCHESTRATOR_ARGS --rollout_transport.host $MASTER_ADDR"
     {% endif %}WANDB_SHARED_LABEL=orchestrator uv run orchestrator $ORCHESTRATOR_ARGS \
         2>&1 | tee $OUTPUT_DIR/logs/orchestrator.log &
+    ORCHESTRATOR_PID=$!
 fi
 {% endif %}
 
-wait -n
-EXIT_CODE=$?
+if [ -n "$TRAINER_PID" ] && [ -n "$ORCHESTRATOR_PID" ]; then
+    wait -n -p EXITED_PID "$TRAINER_PID" "$ORCHESTRATOR_PID"
+    EXIT_CODE=$?
+    if [ "$EXIT_CODE" -eq 0 ]; then
+        if [ "$EXITED_PID" = "$TRAINER_PID" ]; then
+            wait "$ORCHESTRATOR_PID"
+        else
+            wait "$TRAINER_PID"
+        fi
+        EXIT_CODE=$?
+    fi
+else
+    wait -n
+    EXIT_CODE=$?
+fi
 REMAINING_PIDS=$(jobs -p)
 {%- if cleanup_grace_period %}
 if [ "$EXIT_CODE" -ne 0 ]; then
