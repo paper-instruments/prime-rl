@@ -132,6 +132,7 @@ class RolloutDispatcher:
         max_inflight_rollouts: int,
         tasks_per_minute: float | None,
         max_off_policy_steps: int,
+        client_assignment: Literal["group", "trajectory"] = "group",
     ) -> None:
         self.policy = policy
         self.train_envs = train_envs
@@ -142,6 +143,7 @@ class RolloutDispatcher:
         self.train_source = train_source
         self.eval_source = eval_source
         self.max_off_policy_steps = max_off_policy_steps
+        self.client_assignment = client_assignment
 
         self.max_inflight = max_inflight_rollouts
         self.inflight_permits = 0
@@ -411,8 +413,11 @@ class RolloutDispatcher:
         else:
             pool, model_name, live_sourced = self._train_pool_for(group.env_name)
 
-        # Pin a single client per group to keep prefix-cache hits
-        if group.pinned_client is None:
+        # Eval and group assignment preserve the existing group pin. Trajectory
+        # assignment rebalances each train rollout; the chosen client remains
+        # fixed for every turn within that trajectory.
+        pin_client = group.kind == "eval" or self.client_assignment == "group"
+        if not pin_client or group.pinned_client is None:
             if group.kind == "eval":
                 client = await pool.get_eval_client()
             else:
@@ -422,7 +427,8 @@ class RolloutDispatcher:
                 client = await pool.select_train_client(load)
             if group_id not in self.groups:
                 return False
-            group.pinned_client = client
+            if pin_client:
+                group.pinned_client = client
         else:
             client = group.pinned_client
 

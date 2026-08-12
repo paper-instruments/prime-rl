@@ -6,7 +6,14 @@ import httpx
 from verifiers.v1.clients.config import EvalClientConfig
 
 from prime_rl.configs.shared import ClientConfig
-from prime_rl.utils.client import _is_retryable_lora_error, check_health, load_lora_adapter, setup_clients
+from prime_rl.utils.client import (
+    _is_retryable_lora_error,
+    check_health,
+    client_identity,
+    load_lora_adapter,
+    setup_admin_clients,
+    setup_clients,
+)
 
 
 def test_is_retryable_lora_error_returns_true_for_404():
@@ -75,6 +82,33 @@ def test_setup_clients_creates_one_renderer_client_per_url():
     ]
     assert all("X-data-parallel-rank" not in client.headers for client in clients)
     assert clients[0].headers["X-Test"] == "test"
+
+
+def test_setup_clients_exposes_direct_dp_ranks_as_distinct_clients():
+    client_config = ClientConfig(
+        base_url=["http://worker:8000/v1"],
+        dp_rank_count=4,
+        headers={"X-Test": "test"},
+    )
+
+    clients = setup_clients(client_config)
+
+    assert len(clients) == 4
+    assert [client.headers["X-data-parallel-rank"] for client in clients] == ["0", "1", "2", "3"]
+    assert len({client_identity(client) for client in clients}) == 4
+    assert all(client.headers["X-Test"] == "test" for client in clients)
+
+
+def test_setup_admin_clients_are_not_duplicated_per_dp_rank():
+    client_config = ClientConfig(base_url=["http://worker:8000/v1"], dp_rank_count=4)
+
+    clients = setup_admin_clients(client_config)
+
+    try:
+        assert len(clients) == 1
+        assert "X-data-parallel-rank" not in clients[0].headers
+    finally:
+        asyncio.run(clients[0].aclose())
 
 
 def test_check_health_retries_non_success_status():
