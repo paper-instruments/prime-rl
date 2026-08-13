@@ -14,6 +14,7 @@ from prime_rl.utils.client import client_identity
 async def _scheduled_clients(client_assignment: str):
     gate = asyncio.Event()
     seen_clients = []
+    seen_trace_info = []
     clients = [
         TrainClientConfig(base_url="http://worker:8000/v1", headers={"X-data-parallel-rank": str(rank)})
         for rank in range(2)
@@ -25,6 +26,7 @@ async def _scheduled_clients(client_assignment: str):
 
     async def run(**kwargs):
         seen_clients.append(kwargs["client"])
+        seen_trace_info.append(kwargs["trace_info"])
         await gate.wait()
 
     env = SimpleNamespace(
@@ -60,7 +62,7 @@ async def _scheduled_clients(client_assignment: str):
         assert await dispatcher.schedule_group_rollout(group_id, group)
         assert await dispatcher.schedule_group_rollout(group_id, group)
         await asyncio.sleep(0)
-        return dispatcher, group, pool, clients, seen_clients
+        return dispatcher, group_id, group, pool, clients, seen_clients, seen_trace_info
     except BaseException:
         await dispatcher.cancel_inflight_rollouts()
         raise
@@ -68,9 +70,13 @@ async def _scheduled_clients(client_assignment: str):
 
 def test_group_assignment_pins_all_rollouts_to_one_client():
     async def scenario():
-        dispatcher, group, pool, clients, seen_clients = await _scheduled_clients("group")
+        dispatcher, group_id, group, pool, clients, seen_clients, seen_trace_info = await _scheduled_clients("group")
         try:
             assert seen_clients == [clients[0], clients[0]]
+            assert seen_trace_info == [
+                {"rollout_group_id": str(group_id), "sampled_policy_version": 1},
+                {"rollout_group_id": str(group_id), "sampled_policy_version": 1},
+            ]
             assert group.pinned_client == clients[0]
             pool.select_train_client.assert_awaited_once_with(Counter())
         finally:
@@ -81,9 +87,15 @@ def test_group_assignment_pins_all_rollouts_to_one_client():
 
 def test_trajectory_assignment_rebalances_each_rollout():
     async def scenario():
-        dispatcher, group, pool, clients, seen_clients = await _scheduled_clients("trajectory")
+        dispatcher, group_id, group, pool, clients, seen_clients, seen_trace_info = await _scheduled_clients(
+            "trajectory"
+        )
         try:
             assert seen_clients == clients
+            assert seen_trace_info == [
+                {"rollout_group_id": str(group_id), "sampled_policy_version": 1},
+                {"rollout_group_id": str(group_id), "sampled_policy_version": 1},
+            ]
             assert group.pinned_client is None
             assert pool.select_train_client.await_count == 2
             second_load = pool.select_train_client.await_args_list[1].args[0]

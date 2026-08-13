@@ -472,6 +472,10 @@ class RolloutDispatcher:
                     client=client,
                     model_name=model_name,
                     cache_salt=cache_salt,
+                    trace_info={
+                        "rollout_group_id": str(group_id),
+                        "sampled_policy_version": group.policy_version_at_start,
+                    },
                     **addressing,
                 )
             )
