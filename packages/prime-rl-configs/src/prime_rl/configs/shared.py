@@ -139,6 +139,9 @@ class ClientConfig(BaseConfig):
     base_url: list[str] = ["http://localhost:8000/v1"]
     """Base URLs for the OpenAI API. With more than one URL, the client round-robins (chat) completion requests across all servers. Ignored when ``elastic`` is set."""
 
+    dp_rank_count: int = Field(1, ge=1)
+    """Number of direct vLLM data-parallel ranks exposed by each base URL. Each logical client is pinned with ``X-data-parallel-rank``. Leave at 1 when using a router."""
+
     api_key_var: str = "VLLM_API_KEY"
     """Environment variable name containing the API key, resolved via ``os.getenv``. Can be any string when the server is not protected by an API key; the same key is used for every URL."""
 

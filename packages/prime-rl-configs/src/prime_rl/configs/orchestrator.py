@@ -238,6 +238,9 @@ class TrainConfig(BaseConfig):
     env: list[TrainEnvConfig] = Field(default_factory=list)
     """Training environments."""
 
+    client_assignment: Literal["group", "trajectory"] | None = None
+    """How direct inference clients are assigned. ``group`` preserves task-prefix locality; ``trajectory`` balances each rollout independently. Cannot be set when an inference router is enabled."""
+
     sampling: TrainSamplingConfig = TrainSamplingConfig()
     """Shared training sampling configuration."""
 

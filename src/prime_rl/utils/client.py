@@ -18,12 +18,13 @@ from verifiers.v1.clients.config import EvalClientConfig, TrainClientConfig
 from prime_rl.configs.shared import ClientConfig
 from prime_rl.utils.logger import get_logger
 
-ClientIdentity = str
+DP_RANK_HEADER = "X-data-parallel-rank"
+ClientIdentity = tuple[str, str | None]
 
 
 def client_identity(client: vf.ClientConfig) -> ClientIdentity:
     """Stable identity for load balancing across inference clients."""
-    return client.base_url
+    return client.base_url, (client.headers or {}).get(DP_RANK_HEADER)
 
 
 @runtime_checkable
@@ -227,7 +228,7 @@ def setup_clients(
     renderer_model_name: str | None = None,
     pool_size: int | None = None,
 ) -> list[vf.ClientConfig]:
-    """Build one v1 client config per base URL. ``client_type``
+    """Build one v1 client config per base URL and direct DP rank. ``client_type``
     ``renderer`` → token-in/out (``TrainClientConfig``, with the renderer the env
     server should use forwarded as a serialized config so it doesn't fall back to the
     default renderer); otherwise plain chat-completions (``EvalClientConfig``)."""
@@ -245,10 +246,13 @@ def setup_clients(
     }
     clients: list[vf.ClientConfig] = []
     for base_url in client_config.base_url:
-        headers = {**client_config.headers, **env_headers}
-        clients.append(
-            config_cls(base_url=base_url, api_key_var=client_config.api_key_var, headers=headers, **renderer_extra)
-        )
+        for dp_rank in range(client_config.dp_rank_count):
+            headers = {**client_config.headers, **env_headers}
+            if client_config.dp_rank_count > 1:
+                headers[DP_RANK_HEADER] = str(dp_rank)
+            clients.append(
+                config_cls(base_url=base_url, api_key_var=client_config.api_key_var, headers=headers, **renderer_extra)
+            )
     return clients
 
 

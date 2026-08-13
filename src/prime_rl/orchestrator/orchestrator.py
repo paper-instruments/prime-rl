@@ -404,6 +404,7 @@ class Orchestrator:
             max_inflight_rollouts=config.max_inflight_rollouts,
             tasks_per_minute=config.tasks_per_minute,
             max_off_policy_steps=config.max_off_policy_steps,
+            client_assignment=config.train.client_assignment or "group",
         )
         self.train_sink = TrainSink(
             config,

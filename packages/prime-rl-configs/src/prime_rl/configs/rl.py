@@ -744,6 +744,8 @@ class RLConfig(BaseConfig):
         if self.inference is None:
             return self
         client = self.orchestrator.model.client
+        if self.inference.router is None and "dp_rank_count" not in client.model_fields_set:
+            client.dp_rank_count = self.inference.data_parallel_size_local or self.inference.parallel.dp
         if not self.orchestrator.any_policy_sourced and "base_url" not in client.model_fields_set:
             host = self.inference.server.host or "localhost"
             port = self.inference.server.port
@@ -757,6 +759,19 @@ class RLConfig(BaseConfig):
             # the engine directly; multi-node runs get ADMIN_URLS from the sbatch.
             host = self.inference.server.host or "localhost"
             client.admin_base_url = [f"http://{host}:{self.inference.backend_port}/v1"]
+        return self
+
+    @model_validator(mode="after")
+    def validate_direct_client_assignment(self):
+        if (
+            self.inference is not None
+            and self.inference.router is not None
+            and self.orchestrator.train.client_assignment is not None
+        ):
+            raise ValueError(
+                "orchestrator.train.client_assignment requires inference.router = 'None'; "
+                "the router hides individual data-parallel ranks from the orchestrator"
+            )
         return self
 
     @model_validator(mode="after")

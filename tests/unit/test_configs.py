@@ -217,6 +217,44 @@ def test_single_node_auto_inference_ports_follow_server_port():
     assert config.orchestrator.model.client.admin_base_url == ["http://localhost:8101/v1"]
 
 
+def test_direct_inference_exposes_each_dp_rank_to_orchestrator():
+    config = RLConfig.model_validate(
+        {
+            "trainer": {},
+            "orchestrator": {"train": {"client_assignment": "trajectory"}},
+            "inference": {"router": None, "parallel": {"tp": 1}},
+            "deployment": {
+                "type": "single_node",
+                "gpus_per_node": 8,
+                "num_train_gpus": 4,
+                "num_infer_gpus": 4,
+            },
+        }
+    )
+
+    assert config.inference is not None
+    assert config.inference.parallel.dp == 4
+    assert config.orchestrator.model.client.dp_rank_count == 4
+    assert config.orchestrator.train.client_assignment == "trajectory"
+
+
+def test_client_assignment_rejects_router_backed_inference():
+    with pytest.raises(ValidationError, match="client_assignment requires inference.router"):
+        RLConfig.model_validate(
+            {
+                "trainer": {},
+                "orchestrator": {"train": {"client_assignment": "group"}},
+                "inference": {"parallel": {"tp": 1}},
+                "deployment": {
+                    "type": "single_node",
+                    "gpus_per_node": 4,
+                    "num_train_gpus": 2,
+                    "num_infer_gpus": 2,
+                },
+            }
+        )
+
+
 def test_multi_node_auto_inference_parallelism():
     config = RLConfig.model_validate(
         {

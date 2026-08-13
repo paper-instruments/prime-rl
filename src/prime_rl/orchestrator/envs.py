@@ -197,6 +197,7 @@ class Env:
         cache_salt: str | None,
         task_data: dict | None = None,
         task_idx: int | None = None,
+        trace_info: dict | None = None,
     ) -> list[Rollout]:
         """Run one episode; return its typed Traces. A v1 env takes the task itself
         (``task_data``); the legacy bridge is addressed by dataset row (``task_idx``).
@@ -209,6 +210,7 @@ class Env:
             client=client,
             model=model_name,
             sampling=self._sampling(cache_salt),
+            trace_info=trace_info,
         )
         if not episode.traces:
             error = episode.error
