@@ -26,7 +26,6 @@ def test_load_replay_batch(tmp_path):
         },
     ]
     manifest = {
-        "version": 1,
         "artifact_id": "prepared",
         "synthetic_artifact_id": "synthetic",
         "rollout_count": 2,
@@ -34,7 +33,6 @@ def test_load_replay_batch(tmp_path):
         "sample_count": 2,
         "training_tokens": 5,
         "loss_tokens": 3,
-        "preparer_revision": "v2",
     }
     (tmp_path / "manifest.json").write_text(json.dumps(manifest))
     with gzip.open(tmp_path / "prime.jsonl.gz", "wt") as file:

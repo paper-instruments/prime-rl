@@ -7,7 +7,6 @@ from abc import ABC, abstractmethod
 from collections import deque
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Literal
 
 import msgspec
 
@@ -442,7 +441,6 @@ def load_replay_batch(path: Path) -> list[TrainingSample]:
 
 
 class _ReplayManifest(msgspec.Struct, forbid_unknown_fields=True):
-    version: Literal[1]
     artifact_id: str
     synthetic_artifact_id: str
     rollout_count: int
@@ -450,7 +448,6 @@ class _ReplayManifest(msgspec.Struct, forbid_unknown_fields=True):
     sample_count: int
     training_tokens: int
     loss_tokens: int
-    preparer_revision: str
 
 
 class _ReplayRecord(msgspec.Struct, forbid_unknown_fields=True):
