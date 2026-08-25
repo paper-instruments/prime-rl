@@ -163,6 +163,10 @@ class ClientConfig(BaseConfig):
     router_url: str | None = None
     """vllm-router URL for load-aware inference routing. With elastic mode, inference requests go through the router while admin ops still hit discovered pods directly."""
 
+    session_release_path: str | None = None
+    """Optional router endpoint that Verifiers calls when a rollout ends. Used by
+    trajectory-aware policies whose load survives between HTTP requests."""
+
     @property
     def is_elastic(self) -> bool:
         """Check if elastic mode is enabled."""

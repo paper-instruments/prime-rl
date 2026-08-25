@@ -569,6 +569,13 @@ class RLConfig(BaseConfig):
         return self
 
     @model_validator(mode="after")
+    def auto_setup_trajectory_session_release(self):
+        router = self.inference.router if self.inference is not None else None
+        if router is not None and router.type == "vllm-router" and router.policy == "least_loaded":
+            self.orchestrator.model.client.session_release_path = "/v1/router/session"
+        return self
+
+    @model_validator(mode="after")
     def validate_router_replay_without_kv_offload(self):
         if (
             self.trainer.enable_router_replay

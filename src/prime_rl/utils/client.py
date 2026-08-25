@@ -240,7 +240,13 @@ def setup_clients(
     for base_url in client_config.base_url:
         headers = {**client_config.headers, **env_headers}
         clients.append(
-            config_cls(base_url=base_url, api_key_var=client_config.api_key_var, headers=headers, **renderer_extra)
+            config_cls(
+                base_url=base_url,
+                api_key_var=client_config.api_key_var,
+                headers=headers,
+                session_release_path=client_config.session_release_path,
+                **renderer_extra,
+            )
         )
     return clients
 

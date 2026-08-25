@@ -259,6 +259,18 @@ def test_multi_node_auto_inference_parallelism():
     assert config.inference.parallel.dp == 2
 
 
+def test_least_loaded_router_releases_completed_trajectory_sessions():
+    config = RLConfig.model_validate(
+        {
+            "trainer": {},
+            "orchestrator": {},
+            "inference": {"router": {"type": "vllm-router", "policy": "least_loaded"}},
+        }
+    )
+
+    assert config.orchestrator.model.client.session_release_path == "/v1/router/session"
+
+
 def test_orchestrator_vlm_requires_renderer():
     with pytest.raises(ValidationError, match="renderer"):
         OrchestratorConfig.model_validate(

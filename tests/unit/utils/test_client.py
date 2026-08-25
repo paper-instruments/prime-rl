@@ -112,6 +112,7 @@ def test_setup_clients_preserves_chat_client_defaults():
     client_config = ClientConfig(
         base_url=["http://worker-a:8000/v1"],
         api_key_var="PRIME_API_KEY",
+        session_release_path="/v1/router/session",
     )
 
     clients = setup_clients(client_config)
@@ -121,5 +122,6 @@ def test_setup_clients_preserves_chat_client_defaults():
             api_key_var="PRIME_API_KEY",
             base_url="http://worker-a:8000/v1",
             headers={},
+            session_release_path="/v1/router/session",
         )
     ]
