@@ -380,7 +380,7 @@ class Orchestrator:
                 self.policy.model_name = self.lora_name
             self.policy.version = sync_version
 
-        self.train_source = TrainSource(self.train_envs, seed=44)
+        self.train_source = TrainSource(self.train_envs, seed=45)
         self.eval_source: EvalSource | None = (
             EvalSource(
                 self.eval_envs,
