@@ -201,7 +201,7 @@ class ElasticInferencePool:
                 headers_from_env=self.client_config.headers_from_env,
                 extra_headers_from_state=self.client_config.extra_headers_from_state,
                 session_release_path=self.client_config.session_release_path,
-                inference_timeout_seconds=self.client_config.inference_timeout_seconds,
+                inference_read_timeout_seconds=self.client_config.inference_read_timeout_seconds,
             )
             self._train_clients = (
                 setup_clients(

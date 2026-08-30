@@ -416,7 +416,7 @@ def test_elastic_clients_preserve_renderer_model_name_when_model_name_updates():
         client_config.headers_from_env = {}
         client_config.extra_headers_from_state = {}
         client_config.session_release_path = None
-        client_config.inference_timeout_seconds = 1900
+        client_config.inference_read_timeout_seconds = 1900
         from renderers import Qwen3VLRendererConfig
 
         renderer_settings = Qwen3VLRendererConfig()
@@ -442,6 +442,6 @@ def test_elastic_clients_preserve_renderer_model_name_when_model_name_updates():
                 api_key_var="PRIME_API_KEY",
                 base_url="http://10.0.0.1:8000/v1",
                 headers={},
-                inference_timeout_seconds=1900,
+                inference_read_timeout_seconds=1900,
             )
         ]

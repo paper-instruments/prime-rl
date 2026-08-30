@@ -272,12 +272,14 @@ def test_least_loaded_router_releases_completed_trajectory_sessions():
 
 
 @pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
-def test_inference_timeout_must_be_positive_and_finite(value):
-    with pytest.raises(ValidationError, match="inference_timeout_seconds"):
+def test_inference_read_timeout_must_be_positive_and_finite(value):
+    with pytest.raises(ValidationError, match="inference_read_timeout_seconds"):
         RLConfig.model_validate(
             {
                 "trainer": {},
-                "orchestrator": {"model": {"client": {"inference_timeout_seconds": value}}},
+                "orchestrator": {
+                    "model": {"client": {"inference_read_timeout_seconds": value}}
+                },
             }
         )
 

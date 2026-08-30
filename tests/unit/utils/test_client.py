@@ -55,7 +55,7 @@ def test_setup_clients_creates_one_renderer_client_per_url():
     client_config = ClientConfig(
         base_url=["http://worker-a:8000/v1", "http://worker-b:8000/v1"],
         api_key_var="PRIME_API_KEY",
-        inference_timeout_seconds=1234,
+        inference_read_timeout_seconds=1234,
         headers={"X-Test": "test"},
         extra_headers_from_state={"X-Session-ID": "session_id"},
     )
@@ -70,7 +70,7 @@ def test_setup_clients_creates_one_renderer_client_per_url():
     assert [client.type for client in clients] == ["train", "train"]
     assert [client.renderer for client in clients] == [renderer_settings, renderer_settings]
     assert [client.renderer_model_name for client in clients] == [None, None]
-    assert [client.inference_timeout_seconds for client in clients] == [1234, 1234]
+    assert [client.inference_read_timeout_seconds for client in clients] == [1234, 1234]
     assert [client.base_url for client in clients] == [
         "http://worker-a:8000/v1",
         "http://worker-b:8000/v1",

@@ -232,7 +232,7 @@ def setup_clients(
         renderer_extra = {
             "renderer": renderer_config,
             "renderer_model_name": renderer_model_name,
-            "inference_timeout_seconds": client_config.inference_timeout_seconds,
+            "inference_read_timeout_seconds": client_config.inference_read_timeout_seconds,
         }
     env_headers = {
         k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
