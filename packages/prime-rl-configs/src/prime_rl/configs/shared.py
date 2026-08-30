@@ -136,6 +136,13 @@ class ClientConfig(BaseConfig):
     wait_for_ready_timeout: int = 1800
     """Seconds to wait at startup for the inference pool to become ready. Applies to both the static health check and elastic DNS-based discovery."""
 
+    inference_timeout_seconds: float = Field(
+        600.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    """Deadline for one Verifiers training request to an inference endpoint."""
+
     base_url: list[str] = ["http://localhost:8000/v1"]
     """Base URLs for the OpenAI API. With more than one URL, the client round-robins (chat) completion requests across all servers. Ignored when ``elastic`` is set."""
 
