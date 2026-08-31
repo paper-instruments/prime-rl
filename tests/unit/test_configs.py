@@ -277,9 +277,7 @@ def test_inference_read_timeout_must_be_positive_and_finite(value):
         RLConfig.model_validate(
             {
                 "trainer": {},
-                "orchestrator": {
-                    "model": {"client": {"inference_read_timeout_seconds": value}}
-                },
+                "orchestrator": {"model": {"client": {"inference_read_timeout_seconds": value}}},
             }
         )
 
