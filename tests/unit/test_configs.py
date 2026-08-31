@@ -284,6 +284,12 @@ def test_inference_read_timeout_must_be_positive_and_finite(value):
         )
 
 
+def test_inference_read_timeout_defaults_to_verifiers():
+    config = RLConfig.model_validate({"trainer": {}, "orchestrator": {}})
+
+    assert config.orchestrator.model.client.inference_read_timeout_seconds is None
+
+
 def test_orchestrator_vlm_requires_renderer():
     with pytest.raises(ValidationError, match="renderer"):
         OrchestratorConfig.model_validate(

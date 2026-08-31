@@ -79,6 +79,13 @@ def test_setup_clients_creates_one_renderer_client_per_url():
     assert clients[0].headers["X-Test"] == "test"
 
 
+def test_setup_clients_omits_unset_inference_read_timeout():
+    with patch("prime_rl.utils.client.TrainClientConfig") as train_config:
+        setup_clients(ClientConfig(), client_type="renderer")
+
+    assert "inference_read_timeout_seconds" not in train_config.call_args.kwargs
+
+
 def test_check_health_retries_non_success_status():
     client = AsyncMock()
     unavailable = httpx.Response(503, request=httpx.Request("GET", "http://worker/health"))
