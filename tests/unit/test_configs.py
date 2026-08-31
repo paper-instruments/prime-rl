@@ -271,6 +271,23 @@ def test_least_loaded_router_releases_completed_trajectory_sessions():
     assert config.orchestrator.model.client.session_release_path == "/v1/router/session"
 
 
+@pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan")])
+def test_inference_read_timeout_must_be_positive_and_finite(value):
+    with pytest.raises(ValidationError, match="inference_read_timeout_seconds"):
+        RLConfig.model_validate(
+            {
+                "trainer": {},
+                "orchestrator": {"model": {"client": {"inference_read_timeout_seconds": value}}},
+            }
+        )
+
+
+def test_inference_read_timeout_defaults_to_verifiers():
+    config = RLConfig.model_validate({"trainer": {}, "orchestrator": {}})
+
+    assert config.orchestrator.model.client.inference_read_timeout_seconds is None
+
+
 def test_orchestrator_vlm_requires_renderer():
     with pytest.raises(ValidationError, match="renderer"):
         OrchestratorConfig.model_validate(

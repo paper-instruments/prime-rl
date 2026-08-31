@@ -233,6 +233,8 @@ def setup_clients(
             "renderer": renderer_config,
             "renderer_model_name": renderer_model_name,
         }
+        if client_config.inference_read_timeout_seconds is not None:
+            renderer_extra["inference_read_timeout_seconds"] = client_config.inference_read_timeout_seconds
     env_headers = {
         k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
     }
