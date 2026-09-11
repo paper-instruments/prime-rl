@@ -31,8 +31,13 @@ class GRPOAlgorithm(Algorithm):
             total = torch.tensor([rollout.num_total_tokens for rollout in group], dtype=rewards.dtype)
             turns = torch.tensor([rollout.num_turns for rollout in group], dtype=rewards.dtype)
             input = total - output
+            output_denominator = (
+                length_penalty.output_token_reference_length
+                if length_penalty.output_token_reference_length is not None
+                else output.max().clamp(min=1)
+            )
             penalty_frac = (
-                length_penalty.num_output_tokens_weight * (output / output.max().clamp(min=1))
+                length_penalty.num_output_tokens_weight * (output / output_denominator)
                 + length_penalty.num_input_tokens_weight * (input / input.max().clamp(min=1))
                 + length_penalty.num_turns_weight * (turns / turns.max().clamp(min=1))
             )

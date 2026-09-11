@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 import verifiers.v1 as vf
+from pydantic import ValidationError
 
 from prime_rl.configs.algorithm import (
     GRPOAlgoConfig,
@@ -200,13 +201,46 @@ def test_linear_equal_lengths_reduce_to_plain_grpo():
     assert penalized == pytest.approx(plain, abs=1e-6)
 
 
-def test_linear_completion_term_penalizes_longer():
-    """With only the completion term, longer completions get a larger penalty and a
-    lower advantage; advantages stay zero-mean."""
-    cfg = LinearLengthPenaltyConfig(num_output_tokens_weight=0.25, num_input_tokens_weight=0.0, num_turns_weight=0.0)
-    advs = _grpo(_make_group(rewards=[1.0, 1.0, 1.0], completion_lengths=[10, 20, 30]), length_penalty=cfg)
-    assert advs[0] > advs[1] > advs[2]
-    assert sum(advs) == pytest.approx(0.0, abs=1e-6)
+@pytest.mark.parametrize(
+    ("reference_length", "length_scale", "expected"),
+    [
+        (None, 1, [1 / 12, 0.0, -1 / 12]),
+        (None, 2, [1 / 12, 0.0, -1 / 12]),
+        (20, 1, [0.125, 0.0, -0.125]),
+        (20, 2, [0.25, 0.0, -0.25]),
+    ],
+)
+def test_linear_completion_term_penalizes_longer(reference_length, length_scale, expected):
+    """Doubling all lengths doubles fixed-reference pressure, but not group-max pressure."""
+    cfg = LinearLengthPenaltyConfig(
+        output_token_reference_length=reference_length,
+        num_output_tokens_weight=0.25,
+        num_input_tokens_weight=0.0,
+        num_turns_weight=0.0,
+    )
+    group = _make_group(rewards=[1.0, 1.0, 1.0], completion_lengths=[n * length_scale for n in [10, 20, 30]])
+    assert _grpo(group, length_penalty=cfg) == pytest.approx(expected, abs=1e-6)
+
+
+def test_linear_output_reference_preserves_quality_scaling_and_other_terms():
+    cfg = LinearLengthPenaltyConfig(
+        output_token_reference_length=20,
+        num_output_tokens_weight=0.1,
+        num_input_tokens_weight=0.2,
+        num_turns_weight=0.3,
+    )
+    group = [
+        _build_rollout(0.2, sampled_lengths=[10]),
+        _build_rollout(0.8, sampled_lengths=[10, 20], obs_lengths=[9]),
+    ]
+    # Mean reward 0.5 scales penalty fractions 0.22 and 0.65; shaped rewards are 0.09 and 0.475.
+    assert _grpo(group, length_penalty=cfg) == pytest.approx([-0.1925, 0.1925], abs=1e-6)
+
+
+@pytest.mark.parametrize("reference_length", [0, -1])
+def test_linear_rejects_nonpositive_output_reference(reference_length):
+    with pytest.raises(ValidationError, match="output_token_reference_length"):
+        LinearLengthPenaltyConfig(output_token_reference_length=reference_length)
 
 
 def test_linear_context_term_penalizes_more_context():
