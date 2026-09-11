@@ -93,7 +93,7 @@ class SamplingConfig(BaseConfig):
 
 
 class LinearLengthPenaltyConfig(BaseConfig):
-    """Linear ``pass_rate``-scaled penalty subtracted from each reward before the GRPO baseline — the sum of three terms (completion tokens, input tokens, turns), normalized by the group's own max unless an output-token reference length is set. Setting a coefficient to 0 disables its term."""
+    """Linear ``pass_rate``-scaled penalty subtracted from each reward before the GRPO baseline. Completion tokens, input tokens, and turns use group-max normalization unless an output-token reference length is set; returned tool tokens require a fixed reference. Setting a coefficient to 0 disables its term."""
 
     type: Literal["linear"] = "linear"
 
@@ -108,6 +108,18 @@ class LinearLengthPenaltyConfig(BaseConfig):
 
     num_turns_weight: float = Field(0.1, ge=0, allow_inf_nan=False)
     """Scale on the turns term (``pass_rate * (rollout num_turns / group's max num_turns)``). 0 disables the term."""
+
+    num_returned_tool_tokens_weight: float = Field(0.0, ge=0, allow_inf_nan=False)
+    """Scale on ``rollout.metrics['returned_tool_tokens'] / returned_tool_token_reference_length``. The metric must be a finite, non-negative integer-valued count when enabled; 0 disables the term and does not require the metric."""
+
+    returned_tool_token_reference_length: int | None = Field(None, gt=0)
+    """Fixed denominator for returned tool tokens, required when their weight is positive. Counts above it are not clipped."""
+
+    @model_validator(mode="after")
+    def require_returned_tool_reference(self):
+        if self.num_returned_tool_tokens_weight > 0 and self.returned_tool_token_reference_length is None:
+            raise ValueError("returned_tool_token_reference_length is required when num_returned_tool_tokens_weight > 0")
+        return self
 
 
 LengthPenaltyConfig: TypeAlias = LinearLengthPenaltyConfig
@@ -208,7 +220,7 @@ class GRPOAlgoConfig(BaseAlgoConfig):
     action_loss_type: ClassVar[ActionLossType] = "rl"
 
     length_penalty: LengthPenaltyConfig | None = None
-    """Linear length penalty subtracted from each reward before the GRPO baseline (see ``LinearLengthPenaltyConfig``): a ``pass_rate``-scaled sum of output-token, input-token, and turns terms. None disables it."""
+    """Linear length penalty subtracted from each reward before the GRPO baseline (see ``LinearLengthPenaltyConfig``): a ``pass_rate``-scaled sum of output-token, input-token, turns, and returned-tool-token terms. None disables it."""
 
 
 class EchoAlgoConfig(GRPOAlgoConfig):
