@@ -98,7 +98,7 @@ class LinearLengthPenaltyConfig(BaseConfig):
     type: Literal["linear"] = "linear"
 
     num_output_tokens_weight: float = Field(0.25, ge=0, allow_inf_nan=False)
-    """Scale on the output-token term. Each reward is reduced by ``num_output_tokens_weight * pass_rate * (rollout num_output_tokens / output denominator)`` — where ``pass_rate`` is the group's mean reward and the denominator is ``output_token_reference_length`` when set, otherwise the group's max output tokens. Finite and non-negative; 0 disables the term."""
+    """Scale on the output-token term. Each reward is reduced by ``num_output_tokens_weight * pass_rate * (rollout num_output_tokens / output denominator)`` — where ``pass_rate`` is the group's mean reward clamped to zero from below and the denominator is ``output_token_reference_length`` when set, otherwise the group's max output tokens. Finite and non-negative; 0 disables the term."""
 
     output_token_reference_length: int | None = Field(None, gt=0)
     """Fixed denominator for the output-token penalty. None uses the group's maximum output length. This is a scaling reference, not a generation limit; lengths above it are not clipped."""
