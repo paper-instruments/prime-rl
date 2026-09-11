@@ -41,7 +41,7 @@ class GRPOAlgorithm(Algorithm):
                 + length_penalty.num_input_tokens_weight * (input / input.max().clamp(min=1))
                 + length_penalty.num_turns_weight * (turns / turns.max().clamp(min=1))
             )
-            penalty = rewards.mean() * penalty_frac
+            penalty = rewards.mean().clamp_min(0) * penalty_frac
             shaped_rewards = rewards - penalty
             advantages = shaped_rewards - shaped_rewards.mean()
         for rollout, advantage in zip(group, advantages.tolist(), strict=True):
