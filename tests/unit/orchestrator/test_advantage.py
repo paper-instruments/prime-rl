@@ -202,23 +202,32 @@ def test_linear_equal_lengths_reduce_to_plain_grpo():
 
 
 @pytest.mark.parametrize(
-    ("reference_length", "length_scale", "expected"),
+    ("reference_length", "length_scale", "rewards", "expected"),
     [
-        (None, 1, [1 / 12, 0.0, -1 / 12]),
-        (None, 2, [1 / 12, 0.0, -1 / 12]),
-        (20, 1, [0.125, 0.0, -0.125]),
-        (20, 2, [0.25, 0.0, -0.25]),
+        (None, 1, [1.0, 1.0, 1.0], [1 / 12, 0.0, -1 / 12]),
+        (None, 2, [1.0, 1.0, 1.0], [1 / 12, 0.0, -1 / 12]),
+        (20, 1, [1.0, 1.0, 1.0], [0.125, 0.0, -0.125]),
+        (20, 2, [1.0, 1.0, 1.0], [0.25, 0.0, -0.25]),
+        (None, 1, [-1.0, -1.0, -1.0], [0.0, 0.0, 0.0]),
+        (20, 1, [-1.0, -1.0, -1.0], [0.0, 0.0, 0.0]),
+        (None, 1, [-1.0, -0.5, -1.5], [0.0, 0.5, -0.5]),
+        (20, 1, [-1.0, -0.5, -1.5], [0.0, 0.5, -0.5]),
+        (None, 1, [-1.0, 1.0, 3.0], [-23 / 12, 0.0, 23 / 12]),
+        (20, 1, [-1.0, 1.0, 3.0], [-1.875, 0.0, 1.875]),
     ],
 )
-def test_linear_completion_term_penalizes_longer(reference_length, length_scale, expected):
-    """Doubling all lengths doubles fixed-reference pressure, but not group-max pressure."""
+def test_linear_completion_term_uses_nonnegative_group_mean(reference_length, length_scale, rewards, expected):
+    """Negative group means disable length shaping while preserving quality advantages.
+
+    Doubling all lengths doubles fixed-reference pressure, but not group-max pressure.
+    """
     cfg = LinearLengthPenaltyConfig(
         output_token_reference_length=reference_length,
         num_output_tokens_weight=0.25,
         num_input_tokens_weight=0.0,
         num_turns_weight=0.0,
     )
-    group = _make_group(rewards=[1.0, 1.0, 1.0], completion_lengths=[n * length_scale for n in [10, 20, 30]])
+    group = _make_group(rewards=rewards, completion_lengths=[n * length_scale for n in [10, 20, 30]])
     assert _grpo(group, length_penalty=cfg) == pytest.approx(expected, abs=1e-6)
 
 
