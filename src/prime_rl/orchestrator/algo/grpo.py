@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import torch
@@ -41,6 +42,26 @@ class GRPOAlgorithm(Algorithm):
                 + length_penalty.num_input_tokens_weight * (input / input.max().clamp(min=1))
                 + length_penalty.num_turns_weight * (turns / turns.max().clamp(min=1))
             )
+            if length_penalty.num_returned_tool_tokens_weight > 0:
+                returned_tool_counts = []
+                for rollout in group:
+                    count = rollout.metrics.get("returned_tool_tokens")
+                    if (
+                        isinstance(count, bool)
+                        or not isinstance(count, (int, float))
+                        or not math.isfinite(count)
+                        or count < 0
+                        or count != int(count)
+                    ):
+                        raise ValueError(
+                            "returned_tool_tokens must be a finite, non-negative integer-valued metric "
+                            f"(env '{rollout.env_name}', got {count!r})"
+                        )
+                    returned_tool_counts.append(count)
+                reference_length = length_penalty.returned_tool_token_reference_length
+                assert reference_length is not None
+                returned_tool_tokens = torch.tensor(returned_tool_counts, dtype=rewards.dtype)
+                penalty_frac += length_penalty.num_returned_tool_tokens_weight * (returned_tool_tokens / reference_length)
             penalty = rewards.mean().clamp_min(0) * penalty_frac
             shaped_rewards = rewards - penalty
             advantages = shaped_rewards - shaped_rewards.mean()

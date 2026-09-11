@@ -231,19 +231,79 @@ def test_linear_completion_term_uses_nonnegative_group_mean(reference_length, le
     assert _grpo(group, length_penalty=cfg) == pytest.approx(expected, abs=1e-6)
 
 
-def test_linear_output_reference_preserves_quality_scaling_and_other_terms():
+@pytest.mark.parametrize("returned_tool_weight, expected", [(0.0, 0.1925), (0.01, 0.1875)])
+def test_linear_output_reference_preserves_quality_scaling_and_other_terms(returned_tool_weight, expected):
     cfg = LinearLengthPenaltyConfig(
         output_token_reference_length=20,
         num_output_tokens_weight=0.1,
         num_input_tokens_weight=0.2,
         num_turns_weight=0.3,
+        num_returned_tool_tokens_weight=returned_tool_weight,
+        returned_tool_token_reference_length=40000,
     )
     group = [
-        _build_rollout(0.2, sampled_lengths=[10]),
-        _build_rollout(0.8, sampled_lengths=[10, 20], obs_lengths=[9]),
+        _build_rollout(0.2, sampled_lengths=[10], metrics={"returned_tool_tokens": 0}),
+        _build_rollout(0.8, sampled_lengths=[10, 20], obs_lengths=[9], metrics={"returned_tool_tokens": 80000}),
     ]
     # Mean reward 0.5 scales penalty fractions 0.22 and 0.65; shaped rewards are 0.09 and 0.475.
-    assert _grpo(group, length_penalty=cfg) == pytest.approx([-0.1925, 0.1925], abs=1e-6)
+    # The returned-tool term subtracts another 0.01 from the second shaped reward when enabled.
+    assert _grpo(group, length_penalty=cfg) == pytest.approx([-expected, expected], abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "rewards, expected",
+    [
+        ([1.0, 1.0], [0.01, -0.01]),
+        ([-1.0, -0.5], [-0.25, 0.25]),
+        ([-1.0, 1.0], [-1.0, 1.0]),
+        ([-1.0, 3.0], [-1.99, 1.99]),
+    ],
+)
+def test_linear_returned_tool_term_uses_nonnegative_group_mean(rewards, expected):
+    cfg = LinearLengthPenaltyConfig(
+        num_output_tokens_weight=0.0,
+        num_input_tokens_weight=0.0,
+        num_turns_weight=0.0,
+        num_returned_tool_tokens_weight=0.01,
+        returned_tool_token_reference_length=40000,
+    )
+    group = [
+        _make_rollout(rewards[0], metrics={"returned_tool_tokens": 0}),
+        _make_rollout(rewards[1], metrics={"returned_tool_tokens": 80000.0}),
+    ]
+    # Positive-mean cases subtract 0.02 only from the second reward, before group centering.
+    assert _grpo(group, length_penalty=cfg) == pytest.approx(expected, abs=1e-6)
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        {},
+        {"returned_tool_tokens": None},
+        {"returned_tool_tokens": -1},
+        {"returned_tool_tokens": 0.5},
+        {"returned_tool_tokens": float("nan")},
+        {"returned_tool_tokens": float("inf")},
+        {"returned_tool_tokens": "1"},
+        {"returned_tool_tokens": True},
+    ],
+)
+def test_linear_returned_tool_metric_required_only_when_enabled(metrics):
+    rollout = _make_rollout(1.0)
+    rollout.metrics = metrics
+    cfg = LinearLengthPenaltyConfig(
+        num_returned_tool_tokens_weight=0.01,
+        returned_tool_token_reference_length=40000,
+    )
+    with pytest.raises(ValueError, match="returned_tool_tokens"):
+        _grpo([rollout], length_penalty=cfg)
+    cfg.num_returned_tool_tokens_weight = 0.0
+    assert _grpo([rollout], length_penalty=cfg) == [0.0]
+
+
+def test_linear_returned_tool_penalty_requires_reference_when_enabled():
+    with pytest.raises(ValidationError, match="returned_tool_token_reference_length"):
+        LinearLengthPenaltyConfig(num_returned_tool_tokens_weight=0.01)
 
 
 @pytest.mark.parametrize("reference_length", [0, -1])
