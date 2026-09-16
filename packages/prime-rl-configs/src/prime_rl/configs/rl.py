@@ -306,8 +306,6 @@ class RLConfig(BaseConfig):
     @model_validator(mode="after")
     def validate_deployment(self):
         if self.deployment.type == "multi_node":
-            if self.slurm is None:
-                raise ValueError("Must use SLURM for multi-node deployment.")
             num_infer_nodes = self.deployment.infer_nodes_per_replica
             if num_infer_nodes > 0 and not self.inference:
                 raise ValueError("Must configure inference when using multi-node deployment with inference nodes.")
@@ -568,6 +566,13 @@ class RLConfig(BaseConfig):
     def validate_multi_node_requires_router(self):
         if self.deployment.type == "multi_node" and self.inference is not None and self.inference.router is None:
             raise ValueError("Multi-node deployments require inference.router to front the per-rank engines.")
+        return self
+
+    @model_validator(mode="after")
+    def auto_setup_trajectory_session_release(self):
+        router = self.inference.router if self.inference is not None else None
+        if router is not None and router.type == "vllm-router" and router.policy == "least_loaded":
+            self.orchestrator.model.client.session_release_path = "/v1/router/session"
         return self
 
     @model_validator(mode="after")

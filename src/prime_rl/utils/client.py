@@ -233,6 +233,8 @@ def setup_clients(
             "renderer": renderer_config,
             "renderer_model_name": renderer_model_name,
         }
+        if client_config.inference_read_timeout_seconds is not None:
+            renderer_extra["inference_read_timeout_seconds"] = client_config.inference_read_timeout_seconds
     env_headers = {
         k: v for k, v in ((k, os.getenv(v)) for k, v in client_config.headers_from_env.items()) if v is not None
     }
@@ -240,7 +242,13 @@ def setup_clients(
     for base_url in client_config.base_url:
         headers = {**client_config.headers, **env_headers}
         clients.append(
-            config_cls(base_url=base_url, api_key_var=client_config.api_key_var, headers=headers, **renderer_extra)
+            config_cls(
+                base_url=base_url,
+                api_key_var=client_config.api_key_var,
+                headers=headers,
+                session_release_path=client_config.session_release_path,
+                **renderer_extra,
+            )
         )
     return clients
 

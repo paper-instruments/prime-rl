@@ -10,7 +10,20 @@ from prime_rl.utils.config import BaseConfig
 # and the single shared W&B run. The launcher always sets these last, so allowing them in
 # `env_vars` would be a silent no-op (or, on multi-node, a footgun) — reject them instead.
 PROTECTED_ENV_VARS = frozenset(
-    {"CUDA_VISIBLE_DEVICES", "WANDB_SHARED_MODE", "WANDB_SHARED_RUN_ID", "WANDB_SHARED_LABEL"}
+    {
+        "CUDA_VISIBLE_DEVICES",
+        "PRIME_RL_CLUSTER_ID",
+        "PRIME_RL_LOCAL_ADDRESS",
+        "PRIME_RL_NODE_ADDRESSES_JSON",
+        "PRIME_RL_NODE_COUNT",
+        "PRIME_RL_NODE_RANK",
+        "PRIME_RL_POOL_NAMESPACE",
+        "UV_PROJECT_ENVIRONMENT",
+        "VIRTUAL_ENV",
+        "WANDB_SHARED_LABEL",
+        "WANDB_SHARED_MODE",
+        "WANDB_SHARED_RUN_ID",
+    }
 )
 
 
@@ -123,6 +136,14 @@ class ClientConfig(BaseConfig):
     wait_for_ready_timeout: int = 1800
     """Seconds to wait at startup for the inference pool to become ready. Applies to both the static health check and elastic DNS-based discovery."""
 
+    inference_read_timeout_seconds: float | None = Field(
+        None,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    """Optional response-read timeout for Verifiers training requests. `None` preserves
+    the Verifiers library default."""
+
     base_url: list[str] = ["http://localhost:8000/v1"]
     """Base URLs for the OpenAI API. With more than one URL, the client round-robins (chat) completion requests across all servers. Ignored when ``elastic`` is set."""
 
@@ -149,6 +170,10 @@ class ClientConfig(BaseConfig):
 
     router_url: str | None = None
     """vllm-router URL for load-aware inference routing. With elastic mode, inference requests go through the router while admin ops still hit discovered pods directly."""
+
+    session_release_path: str | None = None
+    """Optional router endpoint that Verifiers calls when a rollout ends. Used by
+    trajectory-aware policies whose load survives between HTTP requests."""
 
     @property
     def is_elastic(self) -> bool:
