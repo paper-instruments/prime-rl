@@ -8,7 +8,14 @@ from verifiers.v1.graph import MessageNode
 from verifiers.v1.types import AssistantMessage, ToolMessage, UserMessage
 
 from prime_rl.configs.algorithm import AlgoConfig, FrozenModelConfig
-from prime_rl.orchestrator.algo import Algorithm, EchoAlgorithm, build_algorithm, stamp_advantages, stamp_loss_routing
+from prime_rl.orchestrator.algo import (
+    Algorithm,
+    EchoAlgorithm,
+    GRPOAlgorithm,
+    build_algorithm,
+    stamp_advantages,
+    stamp_loss_routing,
+)
 from prime_rl.orchestrator.trajectories import trace_to_samples
 from prime_rl.orchestrator.types import Rollout
 from prime_rl.transport.types import TrainingSample
@@ -362,4 +369,4 @@ def test_custom_algorithm_config_builds_and_stamps_credit():
     rollout = _make_rollout([_make_sample()])
     asyncio.run(algorithm.finalize_group([rollout]))
     assert rollout.samples[0].advantages == [0.0, 0.0, 0.25, 0.25, 0.0, 0.25]
-    assert build_algorithm(_build(type="grpo"), None).__class__.__name__ == "GRPOAlgorithm"
+    assert isinstance(build_algorithm(_build(type="grpo"), None), GRPOAlgorithm)

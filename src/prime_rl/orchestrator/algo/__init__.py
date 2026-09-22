@@ -62,7 +62,10 @@ ALGORITHM_CLASSES: dict[str, type[Algorithm]] = {
 
 
 def build_algorithm(config: AlgoConfig, policy_pool: InferencePool) -> Algorithm:
-    cls = import_object(config.import_path) if isinstance(config, CustomAlgoConfig) else ALGORITHM_CLASSES[config.type]
+    if isinstance(config, CustomAlgoConfig):
+        cls = import_object(config.import_path)
+    else:
+        cls = ALGORITHM_CLASSES[config.type]
     assert cls.action_loss_type == config.action_loss_type  # config and runtime declare in two places
     # The Algorithm is the runtime of the algorithm config's training signal
     # (its sibling Sampler interprets the sampling half). Every algorithm is
