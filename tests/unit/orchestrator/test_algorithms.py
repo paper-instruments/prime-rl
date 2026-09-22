@@ -8,7 +8,7 @@ from verifiers.v1.graph import MessageNode
 from verifiers.v1.types import AssistantMessage, ToolMessage, UserMessage
 
 from prime_rl.configs.algorithm import AlgoConfig, FrozenModelConfig
-from prime_rl.orchestrator.algo import EchoAlgorithm, stamp_advantages, stamp_loss_routing
+from prime_rl.orchestrator.algo import Algorithm, EchoAlgorithm, build_algorithm, stamp_advantages, stamp_loss_routing
 from prime_rl.orchestrator.trajectories import trace_to_samples
 from prime_rl.orchestrator.types import Rollout
 from prime_rl.transport.types import TrainingSample
@@ -344,3 +344,22 @@ def test_echo_filter_narrows_selection():
     rollout = _two_turn_rollout()
     with pytest.raises(ValueError, match="span the branch's tokens"):
         asyncio.run(_echo_algorithm(filter_fn=lambda trace: [[True] * 6]).score_rollout(rollout))
+
+
+class ConfiguredAlgorithm(Algorithm):
+    def __init__(self, config, policy_pool):
+        super().__init__(config, policy_pool)
+        self.credit = config.kwargs["credit"]
+
+    async def score_group(self, group):
+        for rollout in group:
+            rollout.assign_advantages(self.credit)
+
+
+def test_custom_algorithm_config_builds_and_stamps_credit():
+    config = _build(type="custom", import_path=f"{__name__}.ConfiguredAlgorithm", kwargs={"credit": 0.25})
+    algorithm = build_algorithm(config, None)
+    rollout = _make_rollout([_make_sample()])
+    asyncio.run(algorithm.finalize_group([rollout]))
+    assert rollout.samples[0].advantages == [0.0, 0.0, 0.25, 0.25, 0.0, 0.25]
+    assert build_algorithm(_build(type="grpo"), None).__class__.__name__ == "GRPOAlgorithm"

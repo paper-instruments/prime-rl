@@ -212,6 +212,14 @@ class BaseAlgoConfig(BaseConfig):
         Called once per train env after algorithm inheritance resolves."""
 
 
+class CustomAlgoConfig(BaseAlgoConfig):
+    """An imported algorithm with RL action loss and implementation-owned settings."""
+
+    type: Literal["custom"] = "custom"
+    import_path: str
+    kwargs: dict[str, Any] = Field(default_factory=dict)
+
+
 class GRPOAlgoConfig(BaseAlgoConfig):
     type: Literal["grpo"] = "grpo"
     """GRPO: scalar advantage = reward minus the per-group mean baseline,
@@ -389,7 +397,8 @@ AlgoConfig: TypeAlias = Annotated[
     | HierarchicalGRPOAlgoConfig
     | OPDAlgoConfig
     | OPSDAlgoConfig
-    | SFTAlgoConfig,
+    | SFTAlgoConfig
+    | CustomAlgoConfig,
     Field(discriminator="type"),
 ]
 """The training algorithm: sampling plus the per-token training signal (credit
@@ -405,6 +414,7 @@ its class defaults are the vetted setting.
 - ``sft`` — a frozen model samples, the policy trains with CE on its tokens. Needs a frozen ``sampling.source``.
 - ``echo`` — GRPO on action tokens + weighted CE on tool-response observation tokens.
 
-A new credit-assignment scheme is a new named algorithm in code (subclass
-``Algorithm``, register it), not a config that points at an import path.
+Custom RL algorithms subclass ``Algorithm`` and are selected with
+``type="custom"`` and ``import_path``. Their constructor receives this config
+and the policy pool; ``kwargs`` holds implementation-specific settings.
 """

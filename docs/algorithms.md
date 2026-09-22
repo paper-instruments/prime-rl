@@ -37,6 +37,24 @@ A training algorithm in `prime-rl` is configured under `[orchestrator.algo]`, wh
 
 The trainer is algorithm-blind: the loss is a sum of three components (rl, ce, ref_kl), each normalized by its own global token count; per-token streams ship on the wire (the `rl_weights` / `ce_weights` / `ref_kl_weights` component weights plus the `advantages` stream on each training sample) and the trainer just executes them. Adding an algorithm never touches the dispatcher, packer, or trainer hot path.
 
+### External RL algorithms
+
+Select an importable `Algorithm` subclass without modifying the built-in registry:
+
+```toml
+[orchestrator.algo]
+type = "custom"
+import_path = "my_package.MyAlgorithm"
+
+[orchestrator.algo.kwargs]
+credit = 0.25
+```
+
+The class receives `(config, policy_pool)` and validates its own `config.kwargs`.
+Override `score_rollout` or `score_group` and use `rollout.assign_advantages`;
+Prime retains sample stamping and filtering. Custom algorithms use RL action loss
+and the usual policy sampling defaults. The module must be installed or on PYTHONPATH.
+
 ### Model References
 
 `prime-rl` hosts exactly one model: the trainable policy (`[orchestrator.model]`). Every other model an algorithm uses is an external OpenAI-compatible endpoint, declared *inline on the component that uses it*. A model reference is either the string `"policy"` (the live policy) or a frozen hosted model (`name` + `base_url`):
@@ -93,7 +111,7 @@ alpha = 0.25
 alpha = 0.05
 ```
 
-A new algorithm is a named class in code, not a config that points at an import path — see [Authoring an Algorithm](#authoring-an-algorithm).
+Algorithms are named classes; external RL implementations can use `type="custom"` — see [Authoring an Algorithm](#authoring-an-algorithm).
 
 Echo also takes an optional user-supplied token filter that narrows the role selection per rollout — e.g. dropping warning lines from tool output, or tokens the sampler found unlikely:
 
@@ -420,7 +438,7 @@ Both of `kuhn-poker-v1`'s agents late-bind to the run's own model — shared-pol
 
 ### Authoring an Algorithm
 
-There is no config hook that points at user code — a new credit-assignment scheme is a new named algorithm in the repo. Subclass `Algorithm`, assign credit in the scoring hook whose timing fits your signal, and register the class. The hook receives the group's `Rollout`s (each the env's typed `verifiers.Trace` — turns, tool calls, metadata in `info` — with `samples` attached) and writes credit via `assign_advantages`:
+Subclass `Algorithm` and assign credit in the scoring hook whose timing fits your signal. For an external RL algorithm, select the class with `type="custom"` and `import_path`; for a built-in algorithm, register the class. The hook receives the group's `Rollout`s (each the env's typed `verifiers.Trace` — turns, tool calls, metadata in `info` — with `samples` attached) and writes credit via `assign_advantages`:
 
 ```python
 # src/prime_rl/orchestrator/algo/my_algo.py
@@ -437,7 +455,7 @@ class MyAlgorithm(Algorithm):
             rollout.assign_advantages(advantage)
 ```
 
-Add a typed `MyAlgoConfig` to `prime_rl.configs.algorithm` and its discriminated union, then register `"my_algo": MyAlgorithm` in `ALGORITHM_CLASSES`. Pick the hook by *when* your signal is ready: `score_rollout` for per-arrival credit or credit that needs a model call (it's `async`), `score_group` for group-relative credit (GRPO/MaxRL). `assign_advantages` takes a scalar (broadcast over the rollout's trainable tokens — the common case) or a full-length per-token list aligned to the concatenated sample token_ids (process rewards, step-level credit; `0.0` off-mask).
+A built-in implementation adds a typed `MyAlgoConfig` to the config union and registers `"my_algo": MyAlgorithm` in `ALGORITHM_CLASSES`. An external RL implementation instead validates `config.kwargs` in its constructor. Pick the hook by *when* your signal is ready: `score_rollout` for per-arrival credit or credit that needs a model call (it's `async`), `score_group` for group-relative credit (GRPO/MaxRL). `assign_advantages` takes a scalar (broadcast over the rollout's trainable tokens — the common case) or a full-length per-token list aligned to the concatenated sample token_ids (process rewards, step-level credit; `0.0` off-mask).
 
 Each per-token list must match the rollout's completion-token count exactly — validated loudly when the view writes it. Advantage-based filters and metrics derive from the streams (the zero-advantage filter checks for all-zero streams; logged distributions use per-rollout means). Signals that depend on the live policy's weights (like OPD's reverse KL) cannot be precomputed here; those are reference-scoring algorithms, evaluated in the trainer.
 
