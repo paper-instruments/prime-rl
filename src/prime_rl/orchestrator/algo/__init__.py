@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from prime_rl.configs.algorithm import CustomAlgoConfig
 from prime_rl.orchestrator.algo.base import Algorithm, connect_frozen_pool
 from prime_rl.orchestrator.algo.echo import EchoAlgorithm
 from prime_rl.orchestrator.algo.grpo import GRPOAlgorithm
@@ -40,6 +41,7 @@ from prime_rl.orchestrator.algo.rae import RAEAlgorithm
 from prime_rl.orchestrator.algo.routing import stamp_advantages, stamp_loss_routing
 from prime_rl.orchestrator.algo.sft import SFTDistillAlgorithm
 from prime_rl.orchestrator.types import Rollout
+from prime_rl.utils.utils import import_object
 
 if TYPE_CHECKING:
     from prime_rl.configs.algorithm import AlgoConfig
@@ -60,7 +62,10 @@ ALGORITHM_CLASSES: dict[str, type[Algorithm]] = {
 
 
 def build_algorithm(config: AlgoConfig, policy_pool: InferencePool) -> Algorithm:
-    cls = ALGORITHM_CLASSES[config.type]
+    if isinstance(config, CustomAlgoConfig):
+        cls = import_object(config.import_path)
+    else:
+        cls = ALGORITHM_CLASSES[config.type]
     assert cls.action_loss_type == config.action_loss_type  # config and runtime declare in two places
     # The Algorithm is the runtime of the algorithm config's training signal
     # (its sibling Sampler interprets the sampling half). Every algorithm is
